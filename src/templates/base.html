@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Candidate Screening{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('home.index') }}">
+      <span class="brand-mark">CS</span>
+      Candidate Screening
+    </a>
+    <nav class="nav">
+      {% if current_user %}
+        <span class="nav-user">{{ current_user.email }} · {{ current_user.role|upper }}</span>
+        {% if current_user.role == 'hr' %}
+          <a href="{{ url_for('hr.portal') }}">HR Portal</a>
+        {% endif %}
+        {% if current_user.role == 'candidate' %}
+          <a href="{{ url_for('candidate.apply') }}">Apply</a>
+        {% endif %}
+        <form class="inline" action="{{ url_for('auth.logout') }}" method="post">
+          <button type="submit" class="link-button">Log out</button>
+        </form>
+      {% else %}
+        <a href="{{ url_for('auth.login') }}">Log in</a>
+      {% endif %}
+    </nav>
+  </header>
+
+  <main class="page">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <ul class="flash-list">
+          {% for category, message in messages %}
+            <li class="flash flash-{{ category }}">{{ message }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    Candidate Screening System · CQRS write and read paths are kept separate
+  </footer>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

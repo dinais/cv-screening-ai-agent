@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Apply · Candidate Screening{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Candidate workspace</p>
+    <h1>Submit an application</h1>
+    <p class="muted">Choose a role and attach your CV. Submission is enabled when job listings are live.</p>
+  </div>
+</section>
+
+<section class="split">
+  <article class="card">
+    <h2>Application</h2>
+    <form class="form" method="post" action="#" onsubmit="return false;">
+      <label>
+        Full name
+        <input type="text" name="full_name" disabled placeholder="Available in Feature 4">
+      </label>
+      <label>
+        Open position
+        <select name="job_id" disabled>
+          <option>No open positions yet</option>
+        </select>
+      </label>
+      <label>
+        CV
+        <input type="file" name="cv" disabled accept=".pdf,.doc,.docx,.txt">
+      </label>
+      <button type="submit" class="button primary" disabled>Submit application</button>
+      <p class="hint">This form is a layout placeholder. Applications will append an ApplicationSubmitted event.</p>
+    </form>
+  </article>
+
+  <article class="card">
+    <h2>Open positions</h2>
+    {% if portal.open_jobs %}
+      <ul class="job-list">
+        {% for job in portal.open_jobs %}
+          <li>
+            <strong>{{ job.title }}</strong>
+            <span class="muted">{{ job.summary }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty">There are no open positions to display yet.</p>
+    {% endif %}
+  </article>
+</section>
+{% endblock %}

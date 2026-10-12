@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Home · Candidate Screening{% endblock %}
+{% block content %}
+<section class="hero">
+  <p class="eyebrow">AI-assisted hiring</p>
+  <h1>Screen candidates with a clear, auditable workflow.</h1>
+  <p class="lede">
+    HR posts roles. Candidates apply with a CV. An independent assessment agent
+    evaluates fit so hiring decisions stay evidence-based.
+  </p>
+  <div class="cta-row">
+    <a class="button primary" href="{{ url_for('auth.login') }}">Sign in</a>
+  </div>
+</section>
+
+<section class="card-grid">
+  <article class="card">
+    <h2>HR managers</h2>
+    <p>Publish job requirements, review applicants, and act on structured AI evaluations.</p>
+  </article>
+  <article class="card">
+    <h2>Candidates</h2>
+    <p>Browse open positions and submit an application with your CV in one place.</p>
+  </article>
+  <article class="card">
+    <h2>Fair evaluation</h2>
+    <p>Assessments use CV evidence and verified industry context — not guesswork.</p>
+  </article>
+</section>
+{% endblock %}

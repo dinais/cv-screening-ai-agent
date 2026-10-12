@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}HR Portal · Candidate Screening{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">HR workspace</p>
+    <h1>Hiring dashboard</h1>
+    <p class="muted">Open jobs and applicant volume will appear here once jobs are published.</p>
+  </div>
+</section>
+
+<section class="stat-row">
+  <article class="stat-card">
+    <span class="stat-label">Open jobs</span>
+    <strong class="stat-value">{{ portal.open_jobs }}</strong>
+  </article>
+  <article class="stat-card">
+    <span class="stat-label">Registered applicants</span>
+    <strong class="stat-value">{{ portal.applicants }}</strong>
+  </article>
+</section>
+
+<section class="card">
+  <h2>Jobs</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Role</th>
+          <th>Status</th>
+          <th>Applicants</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if portal.jobs %}
+          {% for job in portal.jobs %}
+            <tr>
+              <td>{{ job.title }}</td>
+              <td>{{ job.status }}</td>
+              <td>{{ job.applicants }}</td>
+            </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="3" class="empty">No jobs yet. Job creation arrives in a later feature.</td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Log in · Candidate Screening{% endblock %}
+{% block content %}
+<section class="auth-layout">
+  <div class="card auth-card">
+    <h1>Sign in</h1>
+    <p class="muted">Use your HR or candidate account to continue.</p>
+    <form method="post" action="{{ url_for('auth.login') }}" class="form" novalidate>
+      <label>
+        Email
+        <input type="email" name="email" autocomplete="username" required>
+      </label>
+      <label>
+        Password
+        <input type="password" name="password" autocomplete="current-password" required>
+      </label>
+      <button type="submit" class="button primary">Log in</button>
+    </form>
+  </div>
+</section>
+{% endblock %}

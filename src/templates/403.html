@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Forbidden · Candidate Screening{% endblock %}
+{% block content %}
+<section class="card auth-card">
+  <h1>Access denied</h1>
+  <p class="muted">Your account does not have permission to view this page.</p>
+  <p><a class="button" href="{{ url_for('home.index') }}">Back to home</a></p>
+</section>
+{% endblock %}
