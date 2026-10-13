@@ -30,6 +30,7 @@ def apply_to_job(job_id):
             cv_text=request.form.get("cv_text", ""),
         )
         if result.success:
+            current_app.extensions["cv_embeddings"].project_application(result.reference_id)
             flash("Application submitted.", "info")
             return redirect(url_for("candidate.apply"))
         flash(result.message, "error")

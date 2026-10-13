@@ -39,12 +39,18 @@ This document breaks down the system development into distinct, incrementally de
   * Command: `SubmitApplicationCommand` -> append `ApplicationSubmitted`, or reject a duplicate application for the same email and `job_id`.
   * Query: replay the events into the HR dashboard, the HR applicant list, and the candidate dashboard.
 
-## Feature 4: Candidate Application & Vector DB Integration
-* **Goal:** Store CV embeddings for semantic search when a candidate applies[cite: 1].
+## Feature 4: Vector Database Integration
+* **Goal:** Turn each submitted CV into an embedding and store that vector for later semantic search. The Event Store stays the source of truth.
+* **Vector store:** ChromaDB, persisted at `VECTOR_DB_PATH`. One collection, `cv_embeddings`.
+* **Embedding:** A local Ollama server, as required by the course architecture (`ollama + Docker`). Base URL `http://localhost:11434`. Model `nomic-embed-text`. The input is the plain `cv_text` on `ApplicationSubmitted`. No file parsing and no OpenAI call.
+* **Write boundary:** `SubmitApplicationCommand` only appends `ApplicationSubmitted`. It does not call Ollama and it does not write to Chroma. After that append succeeds, the controller runs a projector. The projector reads that event, requests the embedding from local Ollama, and upserts one vector. The event row is not updated or deleted.
+* **Identity:** The vector id is `application_id`. Metadata stores `job_id`, `email`, and `full_name`. The text stored with the vector is `cv_text`.
+* **Replay:** A missing vector can be rebuilt by reading `ApplicationSubmitted` again and embedding any application id that is not already in Chroma. That rebuild does not append a new event. A failed embedding does not remove the application event.
 * **Tasks:**
-  * The application form and the `ApplicationSubmitted` event are delivered in Feature 3.
-  * Integrate Vector DB (e.g., ChromaDB).
-  * Convert `cv_text` from `ApplicationSubmitted` into embeddings and store them[cite: 1].
+  * Keep the Feature 3 application form and `ApplicationSubmitted` event.
+  * Add the Chroma collection and the local Ollama embedding call (`ollama + Docker`).
+  * Project `cv_text` into Chroma after a successful application.
+  * Searching those vectors against a job's requirements is Feature 7.
 
 ## Feature 5: Dashboard and Data Display
 * **Goal:** Show the Feature 3 projection on the HR dashboard[cite: 1].

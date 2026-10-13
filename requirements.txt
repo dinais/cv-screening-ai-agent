@@ -3,3 +3,4 @@ python-dotenv>=1.0.0
 Werkzeug>=3.0.0
 pytest>=8.0.0
 pyodbc>=5.1.0
+chromadb>=1.0.0
