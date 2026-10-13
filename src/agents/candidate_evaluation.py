@@ -1,0 +1,246 @@
+"""Independent candidate evaluation process.
+
+Run it with `py -3.14 -m src.agents`. Flask does not import or start this process.
+The process reads events, queries Chroma, calls Tavily through MCP, asks a Deep Agent
+backed by local Ollama to judge fit, and records the result only by issuing
+EvaluateCandidateCommand.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass
+
+from src.commands.evaluation_commands import EvaluateCandidateCommand
+from src.integrations.tavily_mcp import TavilyMcpSearch
+from src.persistence.event_store import EventStore, StoredEvent
+from src.queries.cv_match import CvMatchQuery
+
+logger = logging.getLogger(__name__)
+
+SYSTEM_PROMPT = """
+You judge whether one candidate fits one job.
+Use only the CV text, the semantic match score, and the Tavily results in the user message.
+Do not invent employers, skills, dates, or sources.
+Return one JSON object and nothing else.
+Keys:
+- status: recommended or not_recommended
+- score: integer from 0 to 100
+- strengths: string
+- weaknesses: string
+- missing_information: string
+- recommendation: string
+recommended means the CV fits the requirements. not_recommended means it does not.
+You do not accept or reject the candidate. That decision belongs to HR.
+""".strip()
+
+
+class EvaluationStepError(RuntimeError):
+    """RAG, Tavily, or the model call failed. No event is recorded."""
+
+
+@dataclass(frozen=True)
+class PendingApplication:
+    application_id: str
+    job_id: str
+    title: str
+    requirements: str
+    full_name: str
+    email: str
+    cv_text: str
+
+
+class DeepAgentJudge:
+    """Step 5. The live model is a Deep Agent using local Ollama."""
+
+    def __init__(self, base_url: str, model: str, complete=None) -> None:
+        self._base_url = (base_url or "http://localhost:11434").rstrip("/")
+        self._model = model or "llama3.2"
+        self._complete = complete
+
+    def judge(self, evidence: dict) -> dict:
+        if self._complete is not None:
+            report = self._complete(evidence)
+        else:
+            agent = _production_deep_agent(self._base_url, self._model, SYSTEM_PROMPT)
+            result = agent.invoke({"messages": [{"role": "user", "content": json.dumps(evidence)}]})
+            report = _parse_model_text(_message_text(result))
+        return _require_report(report)
+
+
+class CandidateEvaluationAgent:
+    def __init__(
+        self,
+        events: EventStore,
+        match: CvMatchQuery,
+        search: TavilyMcpSearch,
+        judge: DeepAgentJudge,
+        command: EvaluateCandidateCommand,
+    ) -> None:
+        self._events = events
+        self._match = match
+        self._search = search
+        self._judge = judge
+        self._command = command
+
+    def run(self) -> int:
+        recorded = 0
+        for item in select_pending(self._events):
+            try:
+                semantic_match = self._match.match(item.application_id, item.requirements)
+                hits = self._search.research(item.title, item.requirements, item.cv_text)
+                report = self._judge.judge(_evidence(item, semantic_match, hits))
+                payload = _payload(item, semantic_match, hits, report)
+            except Exception:
+                logger.exception("Evaluation stopped before a command for %s", item.application_id)
+                continue
+            result = self._command.execute(**payload)
+            if result.success:
+                recorded += 1
+            else:
+                logger.warning("EvaluateCandidateCommand rejected %s: %s", item.application_id, result.message)
+        return recorded
+
+
+def select_pending(events: EventStore) -> list[PendingApplication]:
+    """Applications whose stream has no CandidateEvaluated event yet."""
+    jobs: dict[str, dict] = {}
+    for event in events.load_by_types(("JobCreated",)):
+        job_id = str(event.payload.get("job_id") or event.aggregate_id)
+        jobs[job_id] = event.payload
+    pending: list[PendingApplication] = []
+    for event in events.load_by_types(("ApplicationSubmitted",)):
+        application_id = str(event.payload.get("application_id") or event.aggregate_id)
+        if _already_evaluated(events.load(application_id)):
+            continue
+        job_id = str(event.payload.get("job_id") or "")
+        job = jobs.get(job_id)
+        if job is None:
+            continue
+        pending.append(
+            PendingApplication(
+                application_id=application_id,
+                job_id=job_id,
+                title=str(job.get("title") or ""),
+                requirements=str(job.get("requirements") or ""),
+                full_name=str(event.payload.get("full_name") or ""),
+                email=str(event.payload.get("email") or ""),
+                cv_text=str(event.payload.get("cv_text") or ""),
+            )
+        )
+    return pending
+
+
+def _already_evaluated(stream: list[StoredEvent]) -> bool:
+    return any(event.event_type == "CandidateEvaluated" for event in stream)
+
+
+def _evidence(item: PendingApplication, semantic_match: float, hits: list[dict]) -> dict:
+    return {
+        "job_title": item.title,
+        "requirements": item.requirements,
+        "full_name": item.full_name,
+        "cv_text": item.cv_text,
+        "semantic_match": semantic_match,
+        "tavily_results": hits,
+    }
+
+
+def _payload(item: PendingApplication, semantic_match: float, hits: list[dict], report: dict) -> dict:
+    return {
+        "application_id": item.application_id,
+        "job_id": item.job_id,
+        "email": item.email,
+        "status": report["status"],
+        "score": report["score"],
+        "strengths": report["strengths"],
+        "weaknesses": report["weaknesses"],
+        "missing_information": report["missing_information"],
+        "recommendation": report["recommendation"],
+        "semantic_match": semantic_match,
+        "sources": [hit["url"] for hit in hits],
+    }
+
+
+def _production_deep_agent(base_url: str, model: str, system_prompt: str):
+    from deepagents import create_deep_agent
+    from langchain_ollama import ChatOllama
+
+    chat = ChatOllama(model=model, base_url=base_url)
+    return create_deep_agent(model=chat, system_prompt=system_prompt)
+
+
+def _message_text(result: dict) -> str:
+    structured = result.get("structured_response")
+    if hasattr(structured, "model_dump"):
+        return json.dumps(structured.model_dump())
+    if isinstance(structured, dict):
+        return json.dumps(structured)
+    messages = result.get("messages") or []
+    if not messages:
+        raise EvaluationStepError("The model returned nothing.")
+    content = getattr(messages[-1], "content", messages[-1])
+    if isinstance(content, list):
+        chunks = []
+        for part in content:
+            if isinstance(part, dict):
+                chunks.append(str(part.get("text") or ""))
+            else:
+                chunks.append(str(part))
+        content = "".join(chunks)
+    return str(content)
+
+
+def _parse_model_text(text: str) -> dict:
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end < start:
+        raise EvaluationStepError("The model did not return JSON.")
+    try:
+        data = json.loads(text[start : end + 1])
+    except json.JSONDecodeError as exc:
+        raise EvaluationStepError("The model returned unreadable JSON.") from exc
+    if not isinstance(data, dict):
+        raise EvaluationStepError("The model JSON was not an object.")
+    return data
+
+
+def _require_report(report: dict) -> dict:
+    if not isinstance(report, dict):
+        raise EvaluationStepError("The model report was empty.")
+    status = str(report.get("status") or "").strip().lower()
+    score = report.get("score")
+    if isinstance(score, float) and score.is_integer():
+        score = int(score)
+    if isinstance(score, bool) or not isinstance(score, int) or score < 0 or score > 100:
+        raise EvaluationStepError("The model score was not an integer from 0 to 100.")
+    fields = {
+        "strengths": str(report.get("strengths") or "").strip(),
+        "weaknesses": str(report.get("weaknesses") or "").strip(),
+        "missing_information": str(report.get("missing_information") or "").strip(),
+        "recommendation": str(report.get("recommendation") or "").strip(),
+    }
+    if status not in {"recommended", "not_recommended"} or not all(fields.values()):
+        raise EvaluationStepError("The model report was incomplete.")
+    return {"status": status, "score": score, **fields}
+
+
+def main() -> int:
+    from src.config import Config
+
+    logging.basicConfig(level=logging.INFO)
+    if not Config.TAVILY_API_KEY:
+        logger.warning("TAVILY_API_KEY is empty. No evaluation will be recorded.")
+    events = EventStore(Config.DATABASE_URL)
+    events.ensure_schema()
+    agent = CandidateEvaluationAgent(
+        events=events,
+        match=CvMatchQuery(Config.VECTOR_DB_PATH, Config.OLLAMA_BASE_URL, Config.OLLAMA_EMBED_MODEL),
+        search=TavilyMcpSearch(Config.TAVILY_API_KEY),
+        judge=DeepAgentJudge(Config.OLLAMA_BASE_URL, Config.OLLAMA_CHAT_MODEL),
+        command=EvaluateCandidateCommand(events),
+    )
+    recorded = agent.run()
+    print(f"Recorded {recorded} CandidateEvaluated event(s).")
+    return 0

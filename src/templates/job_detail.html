@@ -35,6 +35,7 @@
             <th>Name</th>
             <th>Email</th>
             <th>CV</th>
+            <th>Assessment</th>
           </tr>
         </thead>
         <tbody>
@@ -43,6 +44,25 @@
               <td>{{ person.full_name }}</td>
               <td>{{ person.email }}</td>
               <td class="cv-text">{{ person.cv_text }}</td>
+              <td class="assessment">
+                {% if person.assessment %}
+                  <p class="status-{{ person.assessment.status }}">{{ person.assessment.status }} · {{ person.assessment.score }}/100</p>
+                  <p><span class="muted">Strengths.</span> {{ person.assessment.strengths }}</p>
+                  <p><span class="muted">Weaknesses.</span> {{ person.assessment.weaknesses }}</p>
+                  <p><span class="muted">Missing information.</span> {{ person.assessment.missing_information }}</p>
+                  <p><span class="muted">Recommendation.</span> {{ person.assessment.recommendation }}</p>
+                  <p><span class="muted">Semantic match.</span> {{ "%.2f"|format(person.assessment.semantic_match) }}</p>
+                  {% if person.assessment.sources %}
+                    <ul>
+                      {% for source in person.assessment.sources %}
+                        <li>{{ source }}</li>
+                      {% endfor %}
+                    </ul>
+                  {% endif %}
+                {% else %}
+                  <span class="muted">Not evaluated</span>
+                {% endif %}
+              </td>
             </tr>
           {% endfor %}
         </tbody>

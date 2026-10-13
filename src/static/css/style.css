@@ -190,6 +190,10 @@ th { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color
 .job-row .muted { display: block; }
 .applied-mark { font-weight: 700; color: var(--ok); }
 .cv-text { white-space: pre-wrap; }
+.assessment { font-size: 0.92rem; min-width: 16rem; }
+.assessment p { margin: 0.25rem 0; }
+.status-recommended { color: var(--ok); font-weight: 700; }
+.status-not_recommended { color: var(--danger); font-weight: 700; }
 
 @media (max-width: 800px) {
   .split { grid-template-columns: 1fr; }

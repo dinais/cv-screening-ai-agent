@@ -26,18 +26,20 @@ Instead of storing only the current state of an entity (e.g., Candidate status =
 ### 3.3. CV Embedding Projection
 `cv_text` lives on the append-only `ApplicationSubmitted` event. The command does not write to the vector store and does not call Ollama. After the event is committed, a projector reads that `cv_text`, requests an embedding from the local Ollama server required by the course architecture (`ollama + Docker`, `http://localhost:11434`, model `nomic-embed-text`), and upserts it into the Chroma collection `cv_embeddings`. The vector id is `application_id`. Rebuilding the collection reads the same events again and does not modify the Event Store.
 
-## 4. AI Subsystem: Job Fit Assessment Agent
-The AI evaluation mechanism operates independently from the main web server to avoid blocking user interactions:
-* **Independent Process:** The agent runs as a separate background process[cite: 1].
-* **Data Ingestion:** It reads job requirements and candidate data (CVs) from the database[cite: 1].
-* **RAG & Semantic Search:** CVs are embedded and queried using the Vector Database to find semantic matches against job requirements[cite: 1].
-* **External Tools:** It uses MCP-Studio generated tools and external MCP servers (like Tavily for web search or Gmail for notifications)[cite: 1].
-* **Feedback Loop:** Once the evaluation is complete, the Agent sends a command to the Command Model to update the database with the assessment results.
+## 4. AI Subsystem: Candidate Evaluation Agent
+The evaluation agent is a Deep Agent process. It is not part of the Flask request cycle, so a running evaluation does not block sign-in, job creation, or applications.
+* **Independent process:** A separate operating-system process. Flask only displays results that are already stored as events.
+* **Model:** Local Ollama in Docker (`http://localhost:11434`). No OpenAI call.
+* **Inputs:** An `ApplicationSubmitted` event with no `CandidateEvaluated` yet, the matching job requirements, and that application's vector in Chroma.
+* **RAG:** The agent reads `cv_embeddings` and compares the CV vector with the job requirements. It does not write to Chroma.
+* **Web search:** Tavily is reached only through MCP. The agent does not call the Tavily HTTP API itself.
+* **Write boundary:** The agent issues `EvaluateCandidateCommand`. That command appends one `CandidateEvaluated` event and does not update or delete earlier events.
+* **Output:** `status`, `score`, strengths, weaknesses, missing information, recommendation, semantic match, and sources. HR's later accept or reject is a different command.
 
 ## 5. System Components Diagram Map
 Based on the provided specification[cite: 1]:
 1. **Candidate Screening System (Flask App):** Manages the UI, API Gateway, Query Model, and Command Model.
 2. **Cloud Database (Somee.com):** Hosts the Event Store.
 3. **Vector DB (ChromaDB):** Stores one embedding per `ApplicationSubmitted` event. The embedding is produced by local Ollama (`ollama + Docker`) from `cv_text`.
-4. **Deep Agent Process:** The Job Fit Assessment Agent.
+4. **Deep Agent Process:** The Candidate Evaluation Agent. Independent of Flask. Uses Ollama, reads Chroma for RAG, calls Tavily through MCP, and appends `CandidateEvaluated` through the command model.
 5. **MCP Servers:** Connects the Agent to external capabilities (Tavily, Gmail)[cite: 1].

@@ -4,3 +4,6 @@ Werkzeug>=3.0.0
 pytest>=8.0.0
 pyodbc>=5.1.0
 chromadb>=1.0.0
+deepagents>=0.2.0
+langchain-ollama>=0.3.0
+mcp>=1.8.0

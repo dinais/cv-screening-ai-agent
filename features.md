@@ -50,13 +50,38 @@ This document breaks down the system development into distinct, incrementally de
   * Keep the Feature 3 application form and `ApplicationSubmitted` event.
   * Add the Chroma collection and the local Ollama embedding call (`ollama + Docker`).
   * Project `cv_text` into Chroma after a successful application.
-  * Searching those vectors against a job's requirements is Feature 7.
+  * Searching those vectors against a job's requirements is Feature 5.
 
-## Feature 5: Dashboard and Data Display
-* **Goal:** Show the Feature 3 projection on the HR dashboard[cite: 1].
+## Feature 5: Candidate Evaluation Agent
+* **Purpose:** Decide whether a submitted candidate fits one job. The agent runs outside Flask, compares the CV with the job requirements, checks public industry context, and records an assessment the HR user can read.
+* **Runtime:** The Deep Agent framework, as required by the course architecture. It is a separate process. It does not run inside a Flask request and does not block the web server. Local model calls use Ollama in Docker (`http://localhost:11434`). No OpenAI call.
+* **Inputs:**
+  * `application_id` from an `ApplicationSubmitted` event that has no `CandidateEvaluated` event yet.
+  * Job `title` and `requirements` from the matching `JobCreated` event.
+  * `full_name`, `email`, and plain `cv_text` from that `ApplicationSubmitted` event.
+  * The CV vector already stored in Chroma collection `cv_embeddings` under that `application_id` (Feature 4).
+* **Allowed access and tools:**
+  * **Event Store (read):** `JobCreated` and `ApplicationSubmitted` only. The agent does not update or delete rows.
+  * **Vector DB (read):** Chroma collection `cv_embeddings`. RAG queries this collection with the job requirements and uses the candidate's own vector. The agent does not embed text and does not upsert vectors.
+  * **Tavily (via MCP only):** Web search to check industry standards for the job requirements and public details named in the CV. Direct HTTP calls to Tavily are forbidden.
+  * **Write path:** The agent does not insert into the Event Store itself. It issues `EvaluateCandidateCommand`, and that command appends one `CandidateEvaluated` event.
+* **Logic / actions, in order:**
+  1. Select each `ApplicationSubmitted` event that has no later `CandidateEvaluated` for the same `application_id`.
+  2. Load that job's requirements.
+  3. RAG: query `cv_embeddings` with the job requirements and score the semantic match against this candidate's CV vector.
+  4. Through MCP, run a Tavily search for current industry expectations of those requirements and for public facts the CV names. Do not invent sources.
+  5. Ask local Ollama to judge fit using only the CV text, the RAG match, and the Tavily results. The report fields are strengths, weaknesses, missing information, and a final recommendation.
+  6. Issue `EvaluateCandidateCommand`. If RAG, Tavily, or the model call fails, append nothing.
+* **Expected output:**
+  * One `CandidateEvaluated` event on aggregate type `Application`. Payload: `application_id`, `job_id`, `email`, `status` (`recommended` or `not_recommended`), `score` (0–100), `strengths`, `weaknesses`, `missing_information`, `recommendation`, `semantic_match`, and `sources`.
+  * The HR job drill-down shows that assessment beside the applicant's name, email, and CV text.
+  * The HR accept or reject decision is Feature 7. This agent does not make that decision.
 * **Tasks:**
-  * The open-job count, the applicant count, and the per-job applicant totals are produced by the Feature 3 query model[cite: 1].
-  * Display that projection in the dashboard table and the job drill-down[cite: 1].
+  * Run the Deep Agent as an independent process.
+  * Implement the RAG query against `cv_embeddings`.
+  * Call Tavily only through MCP.
+  * Command: `EvaluateCandidateCommand` -> append `CandidateEvaluated`.
+  * Show the assessment on the HR job drill-down.
 
 ## Feature 6: MCP Integration & Tools Definition
 * **Goal:** Set up the Model Context Protocol (MCP) and define required tools[cite: 1].
@@ -66,11 +91,9 @@ This document breaks down the system development into distinct, incrementally de
   * Define and implement at least one custom Skill and one external Skill from Skills.sh[cite: 1].
   * Define the AI Rule(s)[cite: 1].
 
-## Feature 7: Deep Agent Integration (Job Fit Assessment)
-* **Goal:** Implement the independent AI Agent process to evaluate candidates[cite: 1].
+## Feature 7: HR Decision
+* **Goal:** Let HR accept or reject a candidate after reading the Feature 5 assessment.
 * **Tasks:**
-  * Set up the Deep Agent infrastructure (running as an independent process)[cite: 1].
-  * Implement semantic search (RAG) querying the Vector DB against job requirements[cite: 1].
-  * Implement web search capability via Tavily.com tool[cite: 1].
-  * Generate an evaluation report and issue an `EvaluateCandidateCommand` to update the DB[cite: 1].
-  * Update HR UI to view the AI Agent's evaluation and accept/reject the candidate[cite: 1].
+  * Show the `CandidateEvaluated` assessment on the applicant row.
+  * Command: `DecideCandidateCommand` -> append `CandidateDecided` with `accepted` or `rejected`.
+  * The evaluation agent does not issue this command.
