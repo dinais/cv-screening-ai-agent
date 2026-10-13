@@ -8,7 +8,7 @@ class TestConfig:
     HR_PASSWORD = "hr-pass"
     CANDIDATE_EMAIL = "candidate@example.com"
     CANDIDATE_PASSWORD = "candidate-pass"
-    DATABASE_URL = ""
+    DATABASE_URL = "sqlite:///:memory:"
     OPENAI_API_KEY = ""
     VECTOR_DB_PATH = "./data/vector_store"
 

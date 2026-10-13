@@ -66,6 +66,9 @@ db.sqlite3-journal
 instance/
 .webassets-cache
 
+# Local Event Store fallback. Course data belongs in the cloud SQL database.
+data/
+
 # Scrapy stuff:
 .scrapy
 

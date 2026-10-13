@@ -16,27 +16,41 @@ This document breaks down the system development into distinct, incrementally de
   * Create the `EventStore` table.
   * Implement the base Command and Query handlers (CQRS structure)[cite: 1].
 
-## Feature 3: Job Management (HR Persona)
-* **Goal:** Allow HR to manage job postings[cite: 1].
+## Feature 3: Core Entities and Query Model
+* **Goal:** Record jobs and applications as events, and rebuild the current state for the UI by replaying those events. No ORM. Commands only append. Queries only read.
+* **Entities:**
+  * **Job:** An open role created by an HR user.
+  * **Application:** One candidate's submission for one job. The candidate is the logged-in account, identified by email. Login accounts stay the mock users from Feature 1.
+* **Events:**
+  * `JobCreated` — aggregate type `Job`. Payload: `job_id`, `title`, `requirements`, `created_by`. Appended by `CreateJobCommand` when HR submits the new-job form. A missing title or missing requirements is rejected before any database write.
+  * `ApplicationSubmitted` — aggregate type `Application`. Payload: `application_id`, `job_id`, `full_name`, `email`, `cv_text`. Appended by `SubmitApplicationCommand` when a candidate submits the form for one job. `cv_text` is plain text. A missing name, a missing job, or an unknown job is rejected before any database write. Before appending, the command reads existing `ApplicationSubmitted` events and rejects the command when this email has already applied to this `job_id`. That rejection also happens before any database write. Embeddings are Feature 4.
+* **Query Model:**
+  * The read side loads `JobCreated` and `ApplicationSubmitted` from the Event Store in order and replays them. It does not update or delete rows.
+  * Each `JobCreated` becomes an open job with status Open.
+  * Each `ApplicationSubmitted` is attached to that job, increases its applicant count, and records that applicant's `full_name`, `email`, and `cv_text`.
+  * The HR dashboard shows the open-job count, the total applicant count, and a table with each job's status and applicant count.
+  * The HR job drill-down shows the requirements, the applicant count, and the list of applicants (`full_name`, `email`, and `cv_text`).
+  * The candidate dashboard lists the same open jobs. The query takes the logged-in candidate's email. A job with no `ApplicationSubmitted` for that email is marked not applied. A job that already has one is marked applied.
 * **Tasks:**
-  * UI form for HR to input job requirements[cite: 1].
-  * Command: `CreateJobCommand` -> Append `JobCreated` event.
-  * Query: Read job events to display the jobs list and drill-down details[cite: 1].
+  * HR form to create a job, the jobs table, and the drill-down fed by the projection.
+  * Candidate dashboard: each open job shows an Apply action, or an Applied indicator when this candidate has already applied. There is no generic job dropdown.
+  * Apply action opens a form for that job only. The form collects the candidate's name and `cv_text`. After a successful submit, the candidate returns to the dashboard and that job shows Applied.
+  * Command: `CreateJobCommand` -> append `JobCreated`.
+  * Command: `SubmitApplicationCommand` -> append `ApplicationSubmitted`, or reject a duplicate application for the same email and `job_id`.
+  * Query: replay the events into the HR dashboard, the HR applicant list, and the candidate dashboard.
 
 ## Feature 4: Candidate Application & Vector DB Integration
-* **Goal:** Allow candidates to apply and store their CVs in the Vector DB[cite: 1].
+* **Goal:** Store CV embeddings for semantic search when a candidate applies[cite: 1].
 * **Tasks:**
-  * UI form for Candidates to submit CVs and apply for jobs[cite: 1].
+  * The application form and the `ApplicationSubmitted` event are delivered in Feature 3.
   * Integrate Vector DB (e.g., ChromaDB).
-  * Convert CV text into embeddings and store them[cite: 1].
-  * Command: `SubmitApplicationCommand` -> Append `ApplicationSubmitted` event.
+  * Convert `cv_text` from `ApplicationSubmitted` into embeddings and store them[cite: 1].
 
 ## Feature 5: Dashboard and Data Display
-* **Goal:** Provide the required system dashboard[cite: 1].
+* **Goal:** Show the Feature 3 projection on the HR dashboard[cite: 1].
 * **Tasks:**
-  * Implement Dashboard UI[cite: 1].
-  * Query Model: Aggregate data to show the status of open jobs and the number of registered applicants per job[cite: 1].
-  * Display data in a structured table[cite: 1].
+  * The open-job count, the applicant count, and the per-job applicant totals are produced by the Feature 3 query model[cite: 1].
+  * Display that projection in the dashboard table and the job drill-down[cite: 1].
 
 ## Feature 6: MCP Integration & Tools Definition
 * **Goal:** Set up the Model Context Protocol (MCP) and define required tools[cite: 1].

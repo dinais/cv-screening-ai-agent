@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Apply · {{ job.title }}{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Application</p>
+    <h1>{{ job.title }}</h1>
+    <p class="muted"><a href="{{ url_for('candidate.apply') }}">Back to open positions</a></p>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Requirements</h2>
+  <p>{{ job.requirements }}</p>
+  <form class="form" method="post" action="{{ url_for('candidate.apply_to_job', job_id=job.job_id) }}">
+    <label>
+      Full name
+      <input type="text" name="full_name" required maxlength="200">
+    </label>
+    <label>
+      CV
+      <textarea name="cv_text" required rows="8"></textarea>
+    </label>
+    <button type="submit" class="button primary">Submit application</button>
+  </form>
+</section>
+{% endblock %}

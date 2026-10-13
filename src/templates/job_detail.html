@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }} · Candidate Screening{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">Job</p>
+    <h1>{{ job.title }}</h1>
+    <p class="muted"><a href="{{ url_for('hr.portal') }}">Back to dashboard</a></p>
+  </div>
+</section>
+
+<section class="stat-row">
+  <article class="stat-card">
+    <span class="stat-label">Status</span>
+    <strong class="stat-value">{{ job.status }}</strong>
+  </article>
+  <article class="stat-card">
+    <span class="stat-label">Applicants</span>
+    <strong class="stat-value">{{ job.applicants }}</strong>
+  </article>
+</section>
+
+<section class="card">
+  <h2>Requirements</h2>
+  <p>{{ job.requirements }}</p>
+</section>
+
+<section class="card">
+  <h2>Applicants</h2>
+  {% if job.applicant_list %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Email</th>
+            <th>CV</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for person in job.applicant_list %}
+            <tr>
+              <td>{{ person.full_name }}</td>
+              <td>{{ person.email }}</td>
+              <td class="cv-text">{{ person.cv_text }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="empty">No applicants yet.</p>
+  {% endif %}
+</section>
+{% endblock %}

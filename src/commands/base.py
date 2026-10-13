@@ -10,10 +10,20 @@ class CommandResult:
     success: bool
     message: str = ""
     ticket_id: str | None = None
+    reference_id: str | None = None
 
     @staticmethod
-    def ok(message: str = "", ticket_id: str | None = None) -> CommandResult:
-        return CommandResult(success=True, message=message, ticket_id=ticket_id)
+    def ok(
+        message: str = "",
+        ticket_id: str | None = None,
+        reference_id: str | None = None,
+    ) -> CommandResult:
+        return CommandResult(
+            success=True,
+            message=message,
+            ticket_id=ticket_id,
+            reference_id=reference_id,
+        )
 
     @staticmethod
     def fail(message: str) -> CommandResult:
@@ -21,7 +31,7 @@ class CommandResult:
 
 
 class CommandHandler:
-    """Write-side handler. Implementations may only append events (Feature 2+)."""
+    """Write-side handler. Implementations may only append events to the Event Store."""
 
     def execute(self, *args, **kwargs) -> CommandResult:
         raise NotImplementedError

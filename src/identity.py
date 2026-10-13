@@ -1,8 +1,7 @@
-"""In-memory identity until the Event Store is introduced in Feature 2."""
+"""Mock accounts from configuration. Sessions live in the Event Store."""
 
 from __future__ import annotations
 
-import secrets
 from dataclasses import dataclass
 
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -37,27 +36,6 @@ class IdentityDirectory:
         if not check_password_hash(record.password_hash, password or ""):
             return None
         return record
-
-
-class AuthTicketStore:
-    """Write-side session tickets issued by login commands."""
-
-    def __init__(self) -> None:
-        self._tickets: dict[str, AuthTicket] = {}
-
-    def issue(self, email: str, role: str) -> str:
-        ticket_id = secrets.token_urlsafe(32)
-        self._tickets[ticket_id] = AuthTicket(ticket_id=ticket_id, email=email, role=role)
-        return ticket_id
-
-    def get(self, ticket_id: str | None) -> AuthTicket | None:
-        if not ticket_id:
-            return None
-        return self._tickets.get(ticket_id)
-
-    def revoke(self, ticket_id: str | None) -> None:
-        if ticket_id:
-            self._tickets.pop(ticket_id, None)
 
 
 def directory_from_config(config) -> IdentityDirectory:

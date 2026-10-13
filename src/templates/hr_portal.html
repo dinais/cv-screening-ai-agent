@@ -5,7 +5,7 @@
   <div>
     <p class="eyebrow">HR workspace</p>
     <h1>Hiring dashboard</h1>
-    <p class="muted">Open jobs and applicant volume will appear here once jobs are published.</p>
+    <p class="muted">Each row is an open job. The applicant count is rebuilt from submitted applications.</p>
   </div>
 </section>
 
@@ -18,6 +18,21 @@
     <span class="stat-label">Registered applicants</span>
     <strong class="stat-value">{{ portal.applicants }}</strong>
   </article>
+</section>
+
+<section class="card">
+  <h2>Create a job</h2>
+  <form class="form" method="post" action="{{ url_for('hr.create_job') }}">
+    <label>
+      Role title
+      <input type="text" name="title" required maxlength="200">
+    </label>
+    <label>
+      Requirements
+      <textarea name="requirements" required rows="5"></textarea>
+    </label>
+    <button type="submit" class="button primary">Publish job</button>
+  </form>
 </section>
 
 <section class="card">
@@ -35,14 +50,14 @@
         {% if portal.jobs %}
           {% for job in portal.jobs %}
             <tr>
-              <td>{{ job.title }}</td>
+              <td><a href="{{ url_for('hr.job_detail', job_id=job.job_id) }}">{{ job.title }}</a></td>
               <td>{{ job.status }}</td>
               <td>{{ job.applicants }}</td>
             </tr>
           {% endfor %}
         {% else %}
           <tr>
-            <td colspan="3" class="empty">No jobs yet. Job creation arrives in a later feature.</td>
+            <td colspan="3" class="empty">No jobs yet. Publish a role with the form above.</td>
           </tr>
         {% endif %}
       </tbody>
