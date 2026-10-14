@@ -1,0 +1,29 @@
+---
+description: SDAD compliance and CQRS / Event Sourcing integrity for the Candidate Screening System
+alwaysApply: true
+---
+
+# SDAD and CQRS rules
+
+These rules restate Rules 1–3 of `rules.md` for the coding agent.
+
+## Specification first
+- Read `requirements.md`, `architecture.md`, and the relevant section of `features.md` before changing application code.
+- When behaviour changes, update `features.md` and `architecture.md` first and get the user's approval.
+- Do not add frameworks, ORMs (SQLAlchemy, Peewee, Django ORM), or new design patterns without explicit approval. SQL goes through `src/persistence/event_store.py` and a driver.
+
+## Commands (write side, `src/commands/`)
+- A command validates its input, then only appends events through `EventStore.append`.
+- Reject invalid input before touching the database.
+- Return `CommandResult` only: success, message, reference id. Never return domain data.
+- Never update or delete an event row.
+
+## Queries (read side, `src/queries/`)
+- A query only reads events (`load`, `load_by_types`) or read-only projections, and rebuilds state by replay.
+- A query never appends events and never upserts vectors.
+
+## Projections and agents
+- Vector writes happen only in `src/projections/`, after the event is committed.
+- The evaluation agent writes only by issuing `EvaluateCandidateCommand`.
+- The agent never sends HTTP to external APIs. Tavily is reached only through the `screening-mcp` tool `web_search`.
+- Model calls go through `LLMProvider` (`src/providers/`). Do not call Ollama directly, and never fall back to `MockLLMProvider` silently.
