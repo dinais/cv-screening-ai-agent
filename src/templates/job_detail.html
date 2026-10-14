@@ -36,36 +36,20 @@
             <th>Email</th>
             <th>CV</th>
             <th>Assessment</th>
+            <th>Decision</th>
           </tr>
         </thead>
         <tbody>
           {% for person in job.applicant_list %}
-            <tr>
-              <td>{{ person.full_name }}</td>
+            {% set detail_url = url_for('hr.application_detail', application_id=person.application_id) %}
+            <tr class="row-link" data-href="{{ detail_url }}">
+              <td><a href="{{ detail_url }}">{{ person.full_name }}</a></td>
               <td>{{ person.email }}</td>
               <td class="cv-text">{{ person.cv_text }}</td>
               <td class="assessment">
-                {% if person.assessment %}
-                  <p class="status-{{ person.assessment.status }}">{{ person.assessment.status }} · {{ person.assessment.score }}/100</p>
-                  <p><span class="muted">Strengths.</span> {{ person.assessment.strengths }}</p>
-                  <p><span class="muted">Weaknesses.</span> {{ person.assessment.weaknesses }}</p>
-                  <p><span class="muted">Missing information.</span> {{ person.assessment.missing_information }}</p>
-                  <p><span class="muted">Recommendation.</span> {{ person.assessment.recommendation }}</p>
-                  <p><span class="muted">Semantic match.</span> {{ "%.2f"|format(person.assessment.semantic_match) }}</p>
-                  {% if person.assessment.sources %}
-                    <details>
-                      <summary>Sources ({{ person.assessment.sources|length }})</summary>
-                      <ul>
-                        {% for source in person.assessment.sources %}
-                          <li><a href="{{ source }}">{{ source }}</a></li>
-                        {% endfor %}
-                      </ul>
-                    </details>
-                  {% endif %}
-                {% else %}
-                  <span class="muted">Not evaluated</span>
-                {% endif %}
+                {% with assessment = person.assessment %}{% include "_assessment.html" %}{% endwith %}
               </td>
+              <td>{% include "_decision.html" %}</td>
             </tr>
           {% endfor %}
         </tbody>

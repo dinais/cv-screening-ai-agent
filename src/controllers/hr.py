@@ -9,7 +9,7 @@ hr_bp = Blueprint("hr", __name__, url_prefix="/hr")
 @hr_required
 def portal():
     query = current_app.extensions["queries"]["hr_portal"]
-    view = query.execute()
+    view = query.execute(request.args.get("q", ""))
     return render_template("hr_portal.html", portal=view)
 
 
@@ -37,3 +37,28 @@ def job_detail(job_id):
     if job is None:
         abort(404)
     return render_template("job_detail.html", job=job)
+
+
+@hr_bp.route("/applications/<application_id>")
+@hr_required
+def application_detail(application_id):
+    query = current_app.extensions["queries"]["application_detail"]
+    application = query.execute(application_id)
+    if application is None:
+        abort(404)
+    return render_template("application_detail.html", application=application)
+
+
+@hr_bp.route("/applications/<application_id>/decision", methods=["POST"])
+@hr_required
+def decide_application(application_id):
+    command = current_app.extensions["commands"]["decide_candidate"]
+    result = command.execute(
+        application_id=application_id,
+        decision=request.form.get("decision", ""),
+        decided_by=g.current_user.email,
+    )
+    flash(result.message if not result.success else "Decision recorded.", "error" if not result.success else "info")
+    if current_app.extensions["queries"]["application_detail"].execute(application_id) is None:
+        return redirect(url_for("hr.portal"))
+    return redirect(url_for("hr.application_detail", application_id=application_id))

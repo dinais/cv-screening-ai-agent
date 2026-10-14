@@ -1,0 +1,39 @@
+{% if assessment %}
+  {% if assessment.provider == 'mock' %}
+    <p class="mock-label">Mock evaluation — not a real model judgement</p>
+  {% endif %}
+  <p class="status-{{ assessment.status }}">{{ assessment.status }} · {{ assessment.score }}/100</p>
+  {% if assessment.skill_breakdown %}
+    <table class="skill-table">
+      <thead>
+        <tr><th>Skill</th><th>Match</th><th>Evidence</th></tr>
+      </thead>
+      <tbody>
+        {% for item in assessment.skill_breakdown %}
+          <tr>
+            <td>{{ item.skill }}</td>
+            <td><span class="skill-{{ item.match }}">{{ item.match }}</span></td>
+            <td>{{ item.evidence or '—' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+  <p><span class="muted">Strengths.</span> {{ assessment.strengths }}</p>
+  <p><span class="muted">Weaknesses.</span> {{ assessment.weaknesses }}</p>
+  <p><span class="muted">Missing information.</span> {{ assessment.missing_information }}</p>
+  <p><span class="muted">Recommendation.</span> {{ assessment.recommendation }}</p>
+  <p><span class="muted">Semantic match.</span> {{ "%.2f"|format(assessment.semantic_match) }}</p>
+  {% if assessment.sources %}
+    <details>
+      <summary>Sources ({{ assessment.sources|length }})</summary>
+      <ul>
+        {% for source in assessment.sources %}
+          <li><a href="{{ source }}">{{ source }}</a></li>
+        {% endfor %}
+      </ul>
+    </details>
+  {% endif %}
+{% else %}
+  <span class="muted">Not evaluated</span>
+{% endif %}

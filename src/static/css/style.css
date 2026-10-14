@@ -192,8 +192,35 @@ th { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color
 .cv-text { white-space: pre-wrap; }
 .assessment { font-size: 0.92rem; min-width: 16rem; }
 .assessment p { margin: 0.25rem 0; }
+.mock-label {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 6px;
+  background: #fff4e5;
+  color: #8a4b00;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.skill-table { margin: 0.5rem 0; font-size: 0.85rem; }
+.skill-table th, .skill-table td { padding: 0.35rem 0.3rem; }
+.skill-met { color: var(--ok); font-weight: 600; }
+.skill-partial { color: #8a4b00; font-weight: 600; }
+.skill-missing { color: var(--danger); font-weight: 600; }
 .status-recommended { color: var(--ok); font-weight: 700; }
 .status-not_recommended { color: var(--danger); font-weight: 700; }
+
+.search-form { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.search-form input[type="search"] { flex: 1 1 18rem; }
+tr.row-link { cursor: pointer; }
+tr.row-link:hover td { background: #f1f7f8; }
+.detail-list { display: grid; grid-template-columns: max-content 1fr; gap: 0.4rem 1rem; margin: 0 0 1rem; }
+.detail-list dt { color: var(--muted); font-weight: 600; }
+.detail-list dd { margin: 0; overflow-wrap: anywhere; }
+.assessment-card { margin-top: 1rem; }
+.decision-form { display: flex; gap: 0.6rem; margin-top: 0.75rem; }
+.decision-accepted { color: var(--ok); font-weight: 700; }
+.decision-rejected { color: var(--danger); font-weight: 700; }
+.button.reject { border-color: var(--danger); color: var(--danger); }
 
 @media (max-width: 800px) {
   .split { grid-template-columns: 1fr; }

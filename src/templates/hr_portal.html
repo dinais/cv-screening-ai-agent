@@ -36,7 +36,61 @@
 </section>
 
 <section class="card">
-  <h2>Jobs</h2>
+  <h2>Search</h2>
+  <form class="search-form" method="get" action="{{ url_for('hr.portal') }}" role="search">
+    <input type="search" name="q" value="{{ portal.search }}" placeholder="Job title, requirement, candidate name, email, or CV text" aria-label="Search jobs and applicants">
+    <button type="submit" class="button primary">Search</button>
+    {% if portal.search %}
+      <a class="button" href="{{ url_for('hr.portal') }}">Clear</a>
+    {% endif %}
+  </form>
+</section>
+
+{% if portal.search %}
+<section class="card">
+  <h2>Matching applicants</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Email</th>
+          <th>Job</th>
+          <th>Assessment</th>
+          <th>Decision</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if portal.matches %}
+          {% for match in portal.matches %}
+            {% set detail_url = url_for('hr.application_detail', application_id=match.applicant.application_id) %}
+            <tr class="row-link" data-href="{{ detail_url }}">
+              <td><a href="{{ detail_url }}">{{ match.applicant.full_name }}</a></td>
+              <td>{{ match.applicant.email }}</td>
+              <td>{{ match.job_title }}</td>
+              <td>
+                {% if match.applicant.assessment %}
+                  <span class="status-{{ match.applicant.assessment.status }}">{{ match.applicant.assessment.status }} · {{ match.applicant.assessment.score }}/100</span>
+                {% else %}
+                  <span class="muted">Not evaluated</span>
+                {% endif %}
+              </td>
+              <td>{% with person = match.applicant %}{% include "_decision.html" %}{% endwith %}</td>
+            </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="5" class="empty">No applicants match “{{ portal.search }}”.</td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>{% if portal.search %}Matching jobs{% else %}Jobs{% endif %}</h2>
   <div class="table-wrap">
     <table>
       <thead>
@@ -55,6 +109,10 @@
               <td>{{ job.applicants }}</td>
             </tr>
           {% endfor %}
+        {% elif portal.search %}
+          <tr>
+            <td colspan="3" class="empty">No jobs match “{{ portal.search }}”.</td>
+          </tr>
         {% else %}
           <tr>
             <td colspan="3" class="empty">No jobs yet. Publish a role with the form above.</td>

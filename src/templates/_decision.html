@@ -1,0 +1,5 @@
+{% if person.decision %}
+  <span class="decision-{{ person.decision }}">{{ person.decision }}</span>
+{% else %}
+  <span class="muted">Pending</span>
+{% endif %}

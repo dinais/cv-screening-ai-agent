@@ -6,7 +6,14 @@ from src.persistence.event_store import EventStore, StoredEvent
 from src.queries.base import QueryHandler
 
 _PORTAL_EVENTS = ("JobCreated", "ApplicationSubmitted")
-_DETAIL_EVENTS = ("JobCreated", "ApplicationSubmitted", "CandidateEvaluated")
+_DETAIL_EVENTS = ("JobCreated", "ApplicationSubmitted", "CandidateEvaluated", "CandidateDecided")
+
+
+@dataclass(frozen=True)
+class SkillView:
+    skill: str
+    match: str
+    evidence: str
 
 
 @dataclass(frozen=True)
@@ -19,6 +26,8 @@ class AssessmentView:
     recommendation: str
     semantic_match: float
     sources: tuple[str, ...]
+    skill_breakdown: tuple[SkillView, ...] = ()
+    provider: str = "ollama"
 
 
 @dataclass(frozen=True)
@@ -28,6 +37,8 @@ class ApplicantView:
     cv_text: str
     application_id: str = ""
     assessment: AssessmentView | None = None
+    decision: str = ""
+    decided_by: str = ""
 
 
 @dataclass(frozen=True)
@@ -49,10 +60,20 @@ class CandidateJobView:
 
 
 @dataclass(frozen=True)
+class ApplicationDetailView:
+    job_id: str
+    job_title: str
+    requirements: str
+    applicant: ApplicantView
+
+
+@dataclass(frozen=True)
 class HrPortalView:
     open_jobs: int
     applicants: int
     jobs: tuple[JobView, ...]
+    search: str = ""
+    matches: tuple[ApplicationDetailView, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -96,7 +117,25 @@ def project_jobs(events: list[StoredEvent]) -> tuple[JobView, ...]:
         elif event.event_type == "CandidateEvaluated":
             application_id = str(event.payload.get("application_id") or event.aggregate_id)
             jobs = _with_assessment(jobs, application_id, _assessment(event.payload))
+        elif event.event_type == "CandidateDecided":
+            application_id = str(event.payload.get("application_id") or event.aggregate_id)
+            decision = str(event.payload.get("decision") or "")
+            if decision in {"accepted", "rejected"}:
+                jobs = _with_decision(jobs, application_id, decision, str(event.payload.get("decided_by") or ""))
     return tuple(jobs.values())
+
+
+def _with_decision(jobs: dict[str, JobView], application_id: str, decision: str, decided_by: str) -> dict[str, JobView]:
+    updated: dict[str, JobView] = {}
+    for job_id, job in jobs.items():
+        people = tuple(
+            replace(person, decision=decision, decided_by=decided_by)
+            if person.application_id == application_id
+            else person
+            for person in job.applicant_list
+        )
+        updated[job_id] = replace(job, applicant_list=people)
+    return updated
 
 
 def _with_assessment(jobs: dict[str, JobView], application_id: str, assessment: AssessmentView) -> dict[str, JobView]:
@@ -131,6 +170,22 @@ def _assessment(payload: dict) -> AssessmentView:
         recommendation=str(payload.get("recommendation") or ""),
         semantic_match=semantic_match,
         sources=tuple(str(item) for item in raw_sources),
+        skill_breakdown=_skills(payload.get("skill_breakdown")),
+        provider=str(payload.get("provider") or "ollama"),
+    )
+
+
+def _skills(raw: object) -> tuple[SkillView, ...]:
+    if not isinstance(raw, list):
+        return ()
+    return tuple(
+        SkillView(
+            skill=str(item.get("skill") or ""),
+            match=str(item.get("match") or ""),
+            evidence=str(item.get("evidence") or ""),
+        )
+        for item in raw
+        if isinstance(item, dict)
     )
 
 
@@ -138,13 +193,28 @@ class HrPortalQuery(QueryHandler):
     def __init__(self, events: EventStore) -> None:
         self._events = events
 
-    def execute(self) -> HrPortalView:
-        jobs = project_jobs(self._events.load_by_types(_PORTAL_EVENTS))
+    def execute(self, search: str = "") -> HrPortalView:
+        jobs = project_jobs(self._events.load_by_types(_DETAIL_EVENTS))
         open_jobs = tuple(job for job in jobs if job.status == "Open")
+        needle = (search or "").strip()
+        if not needle:
+            return HrPortalView(
+                open_jobs=len(open_jobs),
+                applicants=sum(job.applicants for job in open_jobs),
+                jobs=open_jobs,
+            )
+        lowered = needle.lower()
         return HrPortalView(
             open_jobs=len(open_jobs),
             applicants=sum(job.applicants for job in open_jobs),
-            jobs=open_jobs,
+            jobs=tuple(job for job in open_jobs if _contains(lowered, job.title, job.requirements)),
+            search=needle,
+            matches=tuple(
+                _application(job, person)
+                for job in open_jobs
+                for person in job.applicant_list
+                if _contains(lowered, person.full_name, person.email, person.cv_text)
+            ),
         )
 
 
@@ -157,6 +227,33 @@ class JobDetailQuery(QueryHandler):
             if job.job_id == job_id:
                 return job
         return None
+
+
+class ApplicationDetailQuery(QueryHandler):
+    def __init__(self, events: EventStore) -> None:
+        self._events = events
+
+    def execute(self, application_id: str) -> ApplicationDetailView | None:
+        if not application_id:
+            return None
+        for job in project_jobs(self._events.load_by_types(_DETAIL_EVENTS)):
+            for person in job.applicant_list:
+                if person.application_id == application_id:
+                    return _application(job, person)
+        return None
+
+
+def _application(job: JobView, person: ApplicantView) -> ApplicationDetailView:
+    return ApplicationDetailView(
+        job_id=job.job_id,
+        job_title=job.title,
+        requirements=job.requirements,
+        applicant=person,
+    )
+
+
+def _contains(needle: str, *fields: str) -> bool:
+    return any(needle in field.lower() for field in fields)
 
 
 class CandidatePortalQuery(QueryHandler):

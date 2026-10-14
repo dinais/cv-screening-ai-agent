@@ -1,7 +1,7 @@
 from src import create_app
 from src.commands.application_commands import SubmitApplicationCommand
 from src.commands.job_commands import CreateJobCommand
-from src.queries.portal_queries import HrPortalQuery, project_jobs
+from src.queries.portal_queries import ApplicationDetailQuery, HrPortalQuery, project_jobs
 from tests.test_auth import TestConfig
 
 
@@ -117,6 +117,104 @@ def test_missing_job_title_does_not_append_an_event():
     assert response.status_code == 200
     assert b"A job needs a title" in response.data
     assert project_jobs(app.extensions["event_store"].load_by_types(("JobCreated",))) == ()
+
+
+def _seed_two_jobs(store):
+    backend = CreateJobCommand(store).execute(
+        title="Backend engineer", requirements="Python and Flask", created_by="hr@example.com"
+    )
+    chef = CreateJobCommand(store).execute(
+        title="Head chef", requirements="French cuisine", created_by="hr@example.com"
+    )
+    ada = SubmitApplicationCommand(store).execute(
+        job_id=backend.reference_id,
+        full_name="Ada Lovelace",
+        email="ada@example.com",
+        cv_text="Flask API development.",
+    )
+    SubmitApplicationCommand(store).execute(
+        job_id=chef.reference_id,
+        full_name="Auguste Escoffier",
+        email="auguste@example.com",
+        cv_text="Kitchen brigade.",
+    )
+    return backend.reference_id, ada.reference_id
+
+
+def test_search_filters_jobs_and_applicants_without_writing():
+    app, _client = _app()
+    store = app.extensions["event_store"]
+    _seed_two_jobs(store)
+    before = store.load_by_types(("JobCreated", "ApplicationSubmitted"))
+
+    by_cv = HrPortalQuery(store).execute("  FLASK ")
+    by_name = HrPortalQuery(store).execute("escoffier")
+    nothing = HrPortalQuery(store).execute("kubernetes")
+    blank = HrPortalQuery(store).execute("   ")
+
+    assert store.load_by_types(("JobCreated", "ApplicationSubmitted")) == before
+    assert by_cv.search == "FLASK"
+    assert [job.title for job in by_cv.jobs] == ["Backend engineer"]
+    assert [match.applicant.full_name for match in by_cv.matches] == ["Ada Lovelace"]
+    assert by_cv.matches[0].job_title == "Backend engineer"
+    assert by_cv.open_jobs == 2
+    assert by_cv.applicants == 2
+    assert [job.title for job in by_name.jobs] == []
+    assert [match.applicant.email for match in by_name.matches] == ["auguste@example.com"]
+    assert nothing.jobs == () and nothing.matches == ()
+    assert blank.search == "" and blank.matches == () and len(blank.jobs) == 2
+
+
+def test_hr_search_page_lists_matches_and_links_to_drill_down():
+    app, hr = _app()
+    _login(hr, "hr@example.com", "hr-pass")
+    _job_id, application_id = _seed_two_jobs(app.extensions["event_store"])
+
+    page = hr.get("/hr/?q=ada").get_data(as_text=True)
+    assert "Matching applicants" in page
+    assert "Ada Lovelace" in page
+    assert "Auguste Escoffier" not in page
+    assert f'/hr/applications/{application_id}' in page
+
+    empty = hr.get("/hr/?q=zzz").get_data(as_text=True)
+    assert "No applicants match" in empty
+    assert "No jobs match" in empty
+
+    plain = hr.get("/hr/").get_data(as_text=True)
+    assert "Matching applicants" not in plain
+
+
+def test_application_drill_down_shows_one_candidate():
+    app, hr = _app()
+    store = app.extensions["event_store"]
+    job_id, application_id = _seed_two_jobs(store)
+
+    view = ApplicationDetailQuery(store).execute(application_id)
+    assert view.job_id == job_id
+    assert view.job_title == "Backend engineer"
+    assert view.requirements == "Python and Flask"
+    assert view.applicant.full_name == "Ada Lovelace"
+    assert view.applicant.assessment is None
+    assert ApplicationDetailQuery(store).execute("missing") is None
+
+    _login(hr, "hr@example.com", "hr-pass")
+    listing = hr.get(f"/hr/jobs/{job_id}").get_data(as_text=True)
+    assert f'data-href="/hr/applications/{application_id}"' in listing
+
+    detail = hr.get(f"/hr/applications/{application_id}")
+    assert detail.status_code == 200
+    text = detail.get_data(as_text=True)
+    assert "Ada Lovelace" in text
+    assert "ada@example.com" in text
+    assert "Flask API development." in text
+    assert "Python and Flask" in text
+    assert "Not evaluated" in text
+    assert "Auguste Escoffier" not in text
+    assert hr.get("/hr/applications/missing").status_code == 404
+
+    candidate = app.test_client()
+    _login(candidate, "candidate@example.com", "candidate-pass")
+    assert candidate.get(f"/hr/applications/{application_id}").status_code == 403
 
 
 def test_candidate_cannot_create_a_job():

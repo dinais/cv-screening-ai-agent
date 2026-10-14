@@ -337,3 +337,65 @@ def test_agent_code_never_calls_tavily_or_ollama_directly():
         if "api.tavily.com" in path.read_text(encoding="utf-8")
     ]
     assert tavily_users == ["mcp_server/tavily.py"]
+
+
+def test_hr_drill_down_shows_the_assessment_and_skill_breakdown():
+    app = create_app(TestConfig)
+    store = app.extensions["event_store"]
+    job_id, application_id = _seed(store, cv_text="Analytical engines.")
+    EvaluateCandidateCommand(store).execute(
+        **_report(
+            application_id=application_id,
+            job_id=job_id,
+            strengths="Strong analytical work",
+            semantic_match=0.5,
+        )
+    )
+    detail = JobDetailQuery(store).execute(job_id)
+    person = detail.applicant_list[0]
+    assert person.full_name == "Ada Lovelace"
+    assert person.cv_text == "Analytical engines."
+    assert person.assessment.status == "recommended"
+    assert person.assessment.strengths == "Strong analytical work"
+    assert person.assessment.semantic_match == 0.5
+    assert [item.skill for item in person.assessment.skill_breakdown] == ["Python", "Flask"]
+
+    client = app.test_client()
+    client.post("/login", data={"email": "hr@example.com", "password": "hr-pass"})
+    page = client.get(f"/hr/jobs/{job_id}")
+    assert page.status_code == 200
+    assert b"Analytical engines." in page.data
+    assert b"Strong analytical work" in page.data
+    assert b"skill-met" in page.data
+    assert b"Python services" in page.data
+    assert b"https://example.com/standards" in page.data
+    assert b"Mock evaluation" not in page.data
+    assert "CandidateEvaluationAgent" not in inspect.getsource(create_app)
+
+    single = client.get(f"/hr/applications/{application_id}")
+    assert single.status_code == 200
+    assert b"Strong analytical work" in single.data
+    assert b"skill-met" in single.data
+    assert b"https://example.com/standards" in single.data
+
+
+def test_mock_assessments_are_labelled_and_old_events_still_render():
+    app = create_app(TestConfig)
+    store = app.extensions["event_store"]
+    job_id, mock_id = _seed(store)
+    _job, old_id = _seed(store)
+    EvaluateCandidateCommand(store).execute(**_report(application_id=mock_id, job_id=job_id, provider="mock"))
+    legacy = _report(application_id=old_id, job_id=_job)
+    del legacy["skill_breakdown"], legacy["provider"]
+    store.append(aggregate_id=old_id, aggregate_type="Application", event_type="CandidateEvaluated", payload=legacy)
+
+    old = JobDetailQuery(store).execute(_job).applicant_list[0].assessment
+    assert old.skill_breakdown == ()
+    assert old.provider == "ollama"
+
+    client = app.test_client()
+    client.post("/login", data={"email": "hr@example.com", "password": "hr-pass"})
+    assert b"Mock evaluation" in client.get(f"/hr/jobs/{job_id}").data
+    legacy_page = client.get(f"/hr/jobs/{_job}")
+    assert legacy_page.status_code == 200
+    assert b"Mock evaluation" not in legacy_page.data

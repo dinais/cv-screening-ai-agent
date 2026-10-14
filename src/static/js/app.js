@@ -6,4 +6,13 @@ document.addEventListener("DOMContentLoaded", () => {
       node.style.transition = "opacity 250ms ease";
     }, 4000);
   });
+
+  document.querySelectorAll("tr.row-link[data-href]").forEach((row) => {
+    row.addEventListener("click", (event) => {
+      if (event.target.closest("a, button, summary, details")) {
+        return;
+      }
+      window.location.href = row.dataset.href;
+    });
+  });
 });

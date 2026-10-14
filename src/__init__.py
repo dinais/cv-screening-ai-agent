@@ -7,6 +7,7 @@ from flask import Flask, g, render_template
 
 from src.commands.application_commands import SubmitApplicationCommand
 from src.commands.auth_commands import LoginCommand, LogoutCommand
+from src.commands.decision_commands import DecideCandidateCommand
 from src.commands.job_commands import CreateJobCommand
 from src.config import Config
 from src.controllers.auth import auth_bp
@@ -19,7 +20,12 @@ from src.persistence.event_store import EventStore
 from src.projections.cv_embeddings import CvEmbeddingProjector
 from src.providers import provider_from_config
 from src.queries.auth_queries import CurrentSessionQuery
-from src.queries.portal_queries import CandidatePortalQuery, HrPortalQuery, JobDetailQuery
+from src.queries.portal_queries import (
+    ApplicationDetailQuery,
+    CandidatePortalQuery,
+    HrPortalQuery,
+    JobDetailQuery,
+)
 
 load_dotenv()
 
@@ -55,11 +61,13 @@ def create_app(config_class=Config) -> Flask:
         "logout": LogoutCommand(event_store),
         "create_job": CreateJobCommand(event_store),
         "submit_application": SubmitApplicationCommand(event_store),
+        "decide_candidate": DecideCandidateCommand(event_store),
     }
     app.extensions["queries"] = {
         "current_session": CurrentSessionQuery(event_store),
         "hr_portal": HrPortalQuery(event_store),
         "job_detail": JobDetailQuery(event_store),
+        "application_detail": ApplicationDetailQuery(event_store),
         "candidate_portal": CandidatePortalQuery(event_store),
     }
 
