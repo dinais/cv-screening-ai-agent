@@ -4,7 +4,9 @@ from src import create_app
 from src.agents.candidate_evaluation import (
     CandidateEvaluationAgent,
     DeepAgentJudge,
+    _parse_model_text,
     _production_deep_agent,
+    _require_report,
 )
 from src.commands.application_commands import SubmitApplicationCommand
 from src.commands.base import CommandResult
@@ -298,6 +300,40 @@ def test_successful_run_records_one_assessment_and_skips_it_next_time():
     assert evaluated[0].payload["semantic_match"] == 0.84
     assert evaluated[0].payload["sources"] == ["https://example.com/standards"]
     assert "invented.example" not in evaluated[0].payload["sources"]
+
+
+def test_score_parser_reads_a_number_inside_the_model_text():
+    report = _require_report({
+        "status": "recommended",
+        "score": "about 85/100",
+        "strengths": "Python",
+        "weaknesses": "No tests",
+        "missing_information": "Dates",
+        "recommendation": "Proceed",
+    })
+    assert report["score"] == 85
+
+    missing = _require_report({
+        "status": "not_recommended",
+        "score": "unknown",
+        "strengths": "Writing",
+        "weaknesses": "No relevant work",
+        "missing_information": "Tools",
+        "recommendation": "Stop",
+    })
+    assert missing["score"] == 0
+
+
+def test_report_json_is_read_when_the_model_adds_prose():
+    text = (
+        "The candidate fits the role.\n"
+        '{"status": "not recommended", "score": "81", "strengths": "Python", '
+        '"weaknesses": "No tests", "missing_information": "Dates", "recommendation": "Proceed"}'
+    )
+    report = _require_report(_parse_model_text(text))
+    assert report["status"] == "not_recommended"
+    assert report["score"] == 81
+    assert report["strengths"] == "Python"
 
 
 def test_deep_agent_runtime_uses_local_ollama():

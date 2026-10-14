@@ -53,11 +53,14 @@
                   <p><span class="muted">Recommendation.</span> {{ person.assessment.recommendation }}</p>
                   <p><span class="muted">Semantic match.</span> {{ "%.2f"|format(person.assessment.semantic_match) }}</p>
                   {% if person.assessment.sources %}
-                    <ul>
-                      {% for source in person.assessment.sources %}
-                        <li>{{ source }}</li>
-                      {% endfor %}
-                    </ul>
+                    <details>
+                      <summary>Sources ({{ person.assessment.sources|length }})</summary>
+                      <ul>
+                        {% for source in person.assessment.sources %}
+                          <li><a href="{{ source }}">{{ source }}</a></li>
+                        {% endfor %}
+                      </ul>
+                    </details>
                   {% endif %}
                 {% else %}
                   <span class="muted">Not evaluated</span>

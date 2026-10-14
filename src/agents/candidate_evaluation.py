@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 
 from src.commands.evaluation_commands import EvaluateCandidateCommand
@@ -61,12 +64,17 @@ class DeepAgentJudge:
 
     def judge(self, evidence: dict) -> dict:
         if self._complete is not None:
-            report = self._complete(evidence)
-        else:
+            return _require_report(self._complete(evidence))
+        try:
             agent = _production_deep_agent(self._base_url, self._model, SYSTEM_PROMPT)
             result = agent.invoke({"messages": [{"role": "user", "content": json.dumps(evidence)}]})
-            report = _parse_model_text(_message_text(result))
-        return _require_report(report)
+            return _require_report(_parse_model_text(_message_text(result)))
+        except Exception:
+            logger.warning(
+                "Deep Agent did not return a JSON report. Asking local Ollama model %s for JSON.",
+                self._model,
+            )
+            return _require_report(_direct_ollama_report(self._base_url, self._model, evidence))
 
 
 class CandidateEvaluationAgent:
@@ -164,11 +172,79 @@ def _payload(item: PendingApplication, semantic_match: float, hits: list[dict], 
 
 
 def _production_deep_agent(base_url: str, model: str, system_prompt: str):
-    from deepagents import create_deep_agent
+    from deepagents import (
+        GeneralPurposeSubagentProfile,
+        HarnessProfile,
+        create_deep_agent,
+        register_harness_profile,
+    )
+    from deepagents._models import get_model_identifier, get_model_provider
     from langchain_ollama import ChatOllama
 
-    chat = ChatOllama(model=model, base_url=base_url)
+    chat = ChatOllama(model=model, base_url=base_url, format="json", temperature=0)
+    profile = HarnessProfile(
+        excluded_tools=frozenset(
+            {"ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute", "task"}
+        ),
+        general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
+        system_prompt_suffix="Return one JSON object and no other text.",
+    )
+    provider = get_model_provider(chat)
+    identifier = get_model_identifier(chat)
+    keys = [f"{provider}:{identifier}"] if provider and identifier else []
+    if identifier:
+        keys.append(str(identifier))
+    for key in keys:
+        register_harness_profile(key, profile)
     return create_deep_agent(model=chat, system_prompt=system_prompt)
+
+
+def _direct_ollama_report(base_url: str, model: str, evidence: dict) -> dict:
+    """Ask local Ollama for one JSON report. This does not call any external API."""
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/api/chat",
+        data=json.dumps(
+            {
+                "model": model,
+                "stream": False,
+                "format": _REPORT_SCHEMA,
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": json.dumps(evidence)},
+                ],
+            }
+        ).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise EvaluationStepError("Local Ollama did not return a report.") from exc
+    content = str((payload.get("message") or {}).get("content") or "")
+    return _parse_model_text(content)
+
+
+_REPORT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {"type": "string"},
+        "score": {"type": "integer"},
+        "strengths": {"type": "string"},
+        "weaknesses": {"type": "string"},
+        "missing_information": {"type": "string"},
+        "recommendation": {"type": "string"},
+    },
+    "required": [
+        "status",
+        "score",
+        "strengths",
+        "weaknesses",
+        "missing_information",
+        "recommendation",
+    ],
+}
 
 
 def _message_text(result: dict) -> str:
@@ -180,41 +256,54 @@ def _message_text(result: dict) -> str:
     messages = result.get("messages") or []
     if not messages:
         raise EvaluationStepError("The model returned nothing.")
-    content = getattr(messages[-1], "content", messages[-1])
+    chunks = [_content_text(getattr(message, "content", message)) for message in messages]
+    text = "\n".join(chunk for chunk in chunks if chunk.strip())
+    if not text.strip():
+        raise EvaluationStepError("The model returned nothing.")
+    return text
+
+
+def _content_text(content: object) -> str:
     if isinstance(content, list):
-        chunks = []
+        parts = []
         for part in content:
             if isinstance(part, dict):
-                chunks.append(str(part.get("text") or ""))
+                parts.append(str(part.get("text") or ""))
             else:
-                chunks.append(str(part))
-        content = "".join(chunks)
-    return str(content)
+                parts.append(str(getattr(part, "text", part) or ""))
+        return "".join(parts)
+    return str(content or "")
 
 
 def _parse_model_text(text: str) -> dict:
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end < start:
-        raise EvaluationStepError("The model did not return JSON.")
-    try:
-        data = json.loads(text[start : end + 1])
-    except json.JSONDecodeError as exc:
-        raise EvaluationStepError("The model returned unreadable JSON.") from exc
-    if not isinstance(data, dict):
-        raise EvaluationStepError("The model JSON was not an object.")
-    return data
+    decoder = json.JSONDecoder()
+    fallback = None
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            value, _end = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(value, dict):
+            continue
+        if "status" in value and "score" in value:
+            return value
+        if fallback is None:
+            fallback = value
+    if fallback is not None:
+        return fallback
+    raise EvaluationStepError("The model did not return JSON.")
 
 
 def _require_report(report: dict) -> dict:
     if not isinstance(report, dict):
         raise EvaluationStepError("The model report was empty.")
-    status = str(report.get("status") or "").strip().lower()
-    score = report.get("score")
-    if isinstance(score, float) and score.is_integer():
-        score = int(score)
-    if isinstance(score, bool) or not isinstance(score, int) or score < 0 or score > 100:
-        raise EvaluationStepError("The model score was not an integer from 0 to 100.")
+    status = str(report.get("status") or "").strip().lower().replace(" ", "_").replace("-", "_")
+    score = _score_value(report.get("score"))
+    if score is None:
+        score = 0
+        logger.warning("The model score was missing or invalid. The report will use 0.")
     fields = {
         "strengths": str(report.get("strengths") or "").strip(),
         "weaknesses": str(report.get("weaknesses") or "").strip(),
@@ -224,6 +313,33 @@ def _require_report(report: dict) -> dict:
     if status not in {"recommended", "not_recommended"} or not all(fields.values()):
         raise EvaluationStepError("The model report was incomplete.")
     return {"status": status, "score": score, **fields}
+
+
+def _score_value(score: object) -> int | None:
+    if isinstance(score, bool) or score is None:
+        return None
+    if isinstance(score, (int, float)):
+        return _clamp_score(float(score))
+    text = str(score).strip()
+    if not text:
+        return None
+    try:
+        return _clamp_score(float(text))
+    except ValueError:
+        pass
+    match = re.search(r"\d+(?:\.\d+)?", text)
+    if match is None:
+        return None
+    return _clamp_score(float(match.group(0)))
+
+
+def _clamp_score(number: float) -> int:
+    rounded = int(round(number))
+    if rounded < 0:
+        return 0
+    if rounded > 100:
+        return 100
+    return rounded
 
 
 def main() -> int:
