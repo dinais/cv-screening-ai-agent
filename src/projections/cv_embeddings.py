@@ -2,36 +2,22 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import urllib.request
-from typing import Callable
 
 from src.persistence.event_store import EventStore, StoredEvent
+from src.providers.base import LLMProvider
 
 logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "cv_embeddings"
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
-DEFAULT_EMBED_MODEL = "nomic-embed-text"
-
-EmbedFn = Callable[[str], list[float]]
+LEGACY_PROVIDER = "ollama"
 
 
 class CvEmbeddingProjector:
-    def __init__(
-        self,
-        events: EventStore,
-        vector_path: str,
-        base_url: str = DEFAULT_OLLAMA_URL,
-        model: str = DEFAULT_EMBED_MODEL,
-        embed: EmbedFn | None = None,
-    ) -> None:
+    def __init__(self, events: EventStore, vector_path: str, provider: LLMProvider) -> None:
         self._events = events
         self._vector_path = vector_path
-        self._base_url = (base_url or DEFAULT_OLLAMA_URL).rstrip("/")
-        self._model = model or DEFAULT_EMBED_MODEL
-        self._embed = embed
+        self._provider = provider
         self._client = None
 
     def project_application(self, application_id: str) -> bool:
@@ -44,15 +30,20 @@ class CvEmbeddingProjector:
         return self._upsert(event)
 
     def project_missing(self) -> int:
-        """Embed application events that are not yet in Chroma. Never appends events."""
-        stored = set(self._collection().get(include=[])["ids"])
+        """Embed applications with no vector, or with a vector from another provider. Never appends events."""
+        stored = self._collection().get(include=["metadatas"])
+        current = {
+            application_id
+            for application_id, metadata in zip(stored["ids"], stored["metadatas"] or [])
+            if embedding_provider(metadata) == self._provider.name
+        }
         added = 0
         for event in self._events.load_by_types(("ApplicationSubmitted",)):
             application_id = _application_id(event)
-            if not application_id or application_id in stored:
+            if not application_id or application_id in current:
                 continue
             if self._upsert(event):
-                stored.add(application_id)
+                current.add(application_id)
                 added += 1
         return added
 
@@ -79,7 +70,7 @@ class CvEmbeddingProjector:
         if not application_id or not cv_text.strip():
             return False
         try:
-            vector = self._embed_text(cv_text)
+            vector = self._provider.embed(cv_text)
             if not vector:
                 return False
             self._collection().upsert(
@@ -91,6 +82,7 @@ class CvEmbeddingProjector:
                         "job_id": str(event.payload.get("job_id") or ""),
                         "email": str(event.payload.get("email") or ""),
                         "full_name": str(event.payload.get("full_name") or ""),
+                        "embedding_provider": self._provider.name,
                     }
                 ],
             )
@@ -98,25 +90,6 @@ class CvEmbeddingProjector:
         except Exception:
             logger.exception("CV embedding failed for %s", application_id)
             return False
-
-    def _embed_text(self, cv_text: str) -> list[float] | None:
-        if self._embed is not None:
-            return self._embed(cv_text)
-        request = urllib.request.Request(
-            f"{self._base_url}/api/embed",
-            data=json.dumps({"model": self._model, "input": cv_text}).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=120) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        embeddings = payload.get("embeddings")
-        if embeddings:
-            return [float(value) for value in embeddings[0]]
-        embedding = payload.get("embedding")
-        if embedding:
-            return [float(value) for value in embedding]
-        return None
 
     def _collection(self):
         if self._client is None:
@@ -128,6 +101,11 @@ class CvEmbeddingProjector:
                 settings=Settings(anonymized_telemetry=False),
             )
         return self._client.get_or_create_collection(name=COLLECTION_NAME)
+
+
+def embedding_provider(metadata: dict | None) -> str:
+    """Vectors written before Feature 5 carry no provider. They came from Ollama."""
+    return str((metadata or {}).get("embedding_provider") or LEGACY_PROVIDER)
 
 
 def _application_event(events: list[StoredEvent]) -> StoredEvent | None:

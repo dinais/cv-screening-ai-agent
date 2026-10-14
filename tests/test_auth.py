@@ -11,6 +11,7 @@ class TestConfig:
     DATABASE_URL = "sqlite:///:memory:"
     OPENAI_API_KEY = ""
     VECTOR_DB_PATH = "./data/vector_store"
+    LLM_PROVIDER = "mock"
 
 
 def _client():

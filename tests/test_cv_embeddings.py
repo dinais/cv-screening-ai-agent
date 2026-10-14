@@ -3,11 +3,20 @@ from src.commands.application_commands import SubmitApplicationCommand
 from src.commands.job_commands import CreateJobCommand
 from src.persistence.event_store import EventStore
 from src.projections.cv_embeddings import CvEmbeddingProjector
+from src.providers.base import LLMProvider
 from tests.test_auth import TestConfig
 
 
-def _embed(text: str) -> list[float]:
-    return [float(len(text)), 0.5, 0.25]
+class _Provider(LLMProvider):
+    def __init__(self, name: str = "mock", embed=None) -> None:
+        self.name = name
+        self._embed = embed or (lambda text: [float(len(text)), 0.5, 0.25])
+
+    def embed(self, text: str) -> list[float]:
+        return self._embed(text)
+
+    def evaluate(self, evidence: dict) -> dict:
+        raise AssertionError("the projector does not evaluate")
 
 
 def _application(store: EventStore, title: str = "Backend engineer"):
@@ -25,12 +34,17 @@ def _application(store: EventStore, title: str = "Backend engineer"):
     return job, application
 
 
-def test_projector_stores_the_cv_vector_without_appending(tmp_path):
+def _store() -> EventStore:
     store = EventStore("sqlite:///:memory:")
     store.ensure_schema()
+    return store
+
+
+def test_projector_stores_the_cv_vector_without_appending(tmp_path):
+    store = _store()
     _job, application = _application(store)
     before = store.load_by_types(("JobCreated", "ApplicationSubmitted"))
-    projector = CvEmbeddingProjector(store, str(tmp_path / "chroma"), embed=_embed)
+    projector = CvEmbeddingProjector(store, str(tmp_path / "chroma"), _Provider())
 
     assert projector.project_application(application.reference_id) is True
 
@@ -41,19 +55,19 @@ def test_projector_stores_the_cv_vector_without_appending(tmp_path):
         "job_id": _job.reference_id,
         "email": "candidate@example.com",
         "full_name": "Ada Lovelace",
+        "embedding_provider": "mock",
     }
     assert store.load_by_types(("JobCreated", "ApplicationSubmitted")) == before
 
 
 def test_failed_embedding_keeps_the_application_event(tmp_path):
-    store = EventStore("sqlite:///:memory:")
-    store.ensure_schema()
+    store = _store()
     _job, application = _application(store)
 
     def explode(_text: str) -> list[float]:
         raise RuntimeError("embedding service unavailable")
 
-    projector = CvEmbeddingProjector(store, str(tmp_path / "chroma"), embed=explode)
+    projector = CvEmbeddingProjector(store, str(tmp_path / "chroma"), _Provider(embed=explode))
     assert projector.project_application(application.reference_id) is False
     assert projector.get(application.reference_id) is None
     events = store.load(application.reference_id)
@@ -62,8 +76,7 @@ def test_failed_embedding_keeps_the_application_event(tmp_path):
 
 
 def test_project_missing_embeds_only_applications_not_already_stored(tmp_path):
-    store = EventStore("sqlite:///:memory:")
-    store.ensure_schema()
+    store = _store()
     _first_job, first = _application(store, "Backend engineer")
     second_job = CreateJobCommand(store).execute(
         title="Data engineer",
@@ -76,7 +89,7 @@ def test_project_missing_embeds_only_applications_not_already_stored(tmp_path):
         email="grace@example.com",
         cv_text="Compilers and COBOL.",
     )
-    projector = CvEmbeddingProjector(store, str(tmp_path / "chroma"), embed=_embed)
+    projector = CvEmbeddingProjector(store, str(tmp_path / "chroma"), _Provider())
     assert projector.project_application(first.reference_id) is True
     before = store.load_by_types(("ApplicationSubmitted",))
 
@@ -87,13 +100,27 @@ def test_project_missing_embeds_only_applications_not_already_stored(tmp_path):
     assert store.load_by_types(("ApplicationSubmitted",)) == before
 
 
+def test_switching_provider_re_embeds_vectors_from_the_old_provider(tmp_path):
+    store = _store()
+    _job, application = _application(store)
+    path = str(tmp_path / "chroma")
+    assert CvEmbeddingProjector(store, path, _Provider("ollama")).project_application(application.reference_id)
+
+    mock = CvEmbeddingProjector(store, path, _Provider("mock", embed=lambda _text: [9.0, 9.0, 9.0]))
+    assert mock.project_missing() == 1
+    assert mock.project_missing() == 0
+    stored = mock.get(application.reference_id)
+    assert stored["metadata"]["embedding_provider"] == "mock"
+    assert stored["embedding"] == [9.0, 9.0, 9.0]
+
+
 def test_apply_route_projects_the_cv_after_the_event_is_saved(tmp_path):
     class Config(TestConfig):
         VECTOR_DB_PATH = str(tmp_path / "chroma")
 
     app = create_app(Config)
     store = app.extensions["event_store"]
-    projector = CvEmbeddingProjector(store, Config.VECTOR_DB_PATH, embed=_embed)
+    projector = CvEmbeddingProjector(store, Config.VECTOR_DB_PATH, _Provider())
     app.extensions["cv_embeddings"] = projector
 
     hr = app.test_client()
@@ -116,38 +143,3 @@ def test_apply_route_projects_the_cv_after_the_event_is_saved(tmp_path):
     stored = projector.get(applications[0].aggregate_id)
     assert stored["document"] == "Built analytical engines."
     assert stored["metadata"]["job_id"] == job_id
-
-
-def test_embedding_request_goes_to_local_ollama(monkeypatch, tmp_path):
-    import json
-    import urllib.request
-
-    captured = {}
-
-    class _Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            return b'{"embeddings": [[0.1, 0.2]]}'
-
-    def fake_urlopen(request, timeout=0):
-        captured["url"] = request.full_url
-        captured["body"] = json.loads(request.data.decode("utf-8"))
-        captured["timeout"] = timeout
-        return _Response()
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    store = EventStore("sqlite:///:memory:")
-    projector = CvEmbeddingProjector(
-        store,
-        str(tmp_path / "chroma"),
-        base_url="http://localhost:11434",
-        model="nomic-embed-text",
-    )
-    assert projector._embed_text("plain cv") == [0.1, 0.2]
-    assert captured["url"] == "http://localhost:11434/api/embed"
-    assert captured["body"] == {"model": "nomic-embed-text", "input": "plain cv"}

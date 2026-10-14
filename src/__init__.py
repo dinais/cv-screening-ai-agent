@@ -17,6 +17,7 @@ from src.controllers.hr import hr_bp
 from src.identity import directory_from_config
 from src.persistence.event_store import EventStore
 from src.projections.cv_embeddings import CvEmbeddingProjector
+from src.providers import provider_from_config
 from src.queries.auth_queries import CurrentSessionQuery
 from src.queries.portal_queries import CandidatePortalQuery, HrPortalQuery, JobDetailQuery
 
@@ -47,8 +48,7 @@ def create_app(config_class=Config) -> Flask:
     app.extensions["cv_embeddings"] = CvEmbeddingProjector(
         event_store,
         getattr(config_class, "VECTOR_DB_PATH", "./data/vector_store"),
-        getattr(config_class, "OLLAMA_BASE_URL", "http://localhost:11434"),
-        getattr(config_class, "OLLAMA_EMBED_MODEL", "nomic-embed-text"),
+        provider_from_config(config_class),
     )
     app.extensions["commands"] = {
         "login": LoginCommand(directory, event_store),
