@@ -31,6 +31,15 @@ This document breaks down the system development into distinct, incrementally de
   * The HR dashboard shows the open-job count, the total applicant count, and a table with each job's status and applicant count.
   * The HR job drill-down shows the requirements, the applicant count, and the list of applicants (`full_name`, `email`, and `cv_text`).
   * The candidate dashboard lists the same open jobs. The query takes the logged-in candidate's email. A job with no `ApplicationSubmitted` for that email is marked not applied. A job that already has one is marked applied.
+* **Search (HR):**
+  * The HR dashboard has a search box. It submits `GET /hr/?q=<text>`. Nothing is written.
+  * Matching is a case-insensitive substring match on the replayed state. A job matches when `q` is in its `title` or `requirements`. An applicant matches when `q` is in `full_name`, `email`, or `cv_text`.
+  * With a non-empty `q`, the jobs table shows only matching jobs, and a "Matching applicants" table lists each matching applicant with name, email, job title, and assessment status. The stat cards still show the totals.
+  * An empty or blank `q` shows the normal dashboard with no applicants table.
+* **Candidate drill-down (HR):**
+  * `GET /hr/applications/<application_id>` shows one application: the job title (linked to the job drill-down), the job requirements, the applicant's `full_name`, `email`, and `cv_text`, and the Feature 5 assessment when there is one.
+  * Every applicant row on the job drill-down and in the search results opens this page when clicked.
+  * An unknown `application_id` returns 404. A candidate account gets 403.
 * **Tasks:**
   * HR form to create a job, the jobs table, and the drill-down fed by the projection.
   * Candidate dashboard: each open job shows an Apply action, or an Applied indicator when this candidate has already applied. There is no generic job dropdown.
@@ -38,6 +47,7 @@ This document breaks down the system development into distinct, incrementally de
   * Command: `CreateJobCommand` -> append `JobCreated`.
   * Command: `SubmitApplicationCommand` -> append `ApplicationSubmitted`, or reject a duplicate application for the same email and `job_id`.
   * Query: replay the events into the HR dashboard, the HR applicant list, and the candidate dashboard.
+  * Query: HR search over jobs and applicants, and the single-application drill-down.
 
 ## Feature 4: Vector Database Integration
 * **Goal:** Turn each submitted CV into an embedding and store that vector for later semantic search. The Event Store stays the source of truth.
@@ -54,7 +64,16 @@ This document breaks down the system development into distinct, incrementally de
 
 ## Feature 5: Candidate Evaluation Agent
 * **Purpose:** Decide whether a submitted candidate fits one job. The agent runs outside Flask, compares the CV with the job requirements, checks public industry context, and records an assessment the HR user can read.
-* **Runtime:** The Deep Agent framework, as required by the course architecture. It is a separate process. It does not run inside a Flask request and does not block the web server. Local model calls use Ollama in Docker (`http://localhost:11434`). No OpenAI call.
+* **Runtime:** The Deep Agent framework, as required by the course architecture. It is a separate process (`python -m src.agents`). It does not run inside a Flask request and does not block the web server. Model calls go through the `LLMProvider` interface below. No OpenAI call.
+* **Model provider abstraction (`LLMProvider`):**
+  * One interface with two operations:
+    * `embed(text) -> list[float]` — turns text into a vector.
+    * `evaluate(evidence) -> dict` — returns one evaluation report in the JSON shape described under Expected output.
+  * The Feature 4 projector and the RAG query call `embed`. The agent calls `evaluate`. Neither of them calls Ollama directly anymore.
+  * **`OllamaProvider`** (default) — local Ollama in Docker at `OLLAMA_BASE_URL` (`http://localhost:11434`). Embeddings use `OLLAMA_EMBED_MODEL` (`nomic-embed-text`, 768 dimensions). Evaluation runs the Deep Agent on `ChatOllama` with `OLLAMA_CHAT_MODEL` (`llama3.2`) in JSON mode. If the Deep Agent returns no valid report, the provider asks Ollama's `/api/chat` once more with the report JSON schema.
+  * **`MockLLMProvider`** — for development machines with no local Ollama. It makes no network call. `embed` returns a 768-dimension vector derived from a hash of the text, so the same text always gives the same vector. `evaluate` builds the report from the evidence alone: the score comes from `semantic_match`, and the skill breakdown comes from matching requirement keywords against `cv_text`.
+  * **Selection:** `LLM_PROVIDER=ollama|mock`, default `ollama`. The agent never falls back to the mock on its own. If Ollama is down while `LLM_PROVIDER=ollama`, the evaluation fails and nothing is appended.
+  * **No mixing:** Each Chroma vector stores the `embedding_provider` that made it in its metadata. Mock vectors and Ollama vectors are not comparable. After switching `LLM_PROVIDER`, rebuild `cv_embeddings` by replaying `ApplicationSubmitted` (Feature 4 replay).
 * **Inputs:**
   * `application_id` from an `ApplicationSubmitted` event that has no `CandidateEvaluated` event yet.
   * Job `title` and `requirements` from the matching `JobCreated` event.
@@ -62,38 +81,91 @@ This document breaks down the system development into distinct, incrementally de
   * The CV vector already stored in Chroma collection `cv_embeddings` under that `application_id` (Feature 4).
 * **Allowed access and tools:**
   * **Event Store (read):** `JobCreated` and `ApplicationSubmitted` only. The agent does not update or delete rows.
-  * **Vector DB (read):** Chroma collection `cv_embeddings`. RAG queries this collection with the job requirements and uses the candidate's own vector. The agent does not embed text and does not upsert vectors.
-  * **Tavily (via MCP only):** Web search to check industry standards for the job requirements and public details named in the CV. Direct HTTP calls to Tavily are forbidden.
+  * **Vector DB (read):** Chroma collection `cv_embeddings`. RAG embeds the job requirements with `LLMProvider.embed` and compares them with this candidate's stored vector. The agent does not upsert vectors.
+  * **Tavily (via MCP only):** Web search to check industry standards for the job requirements and public details named in the CV. The agent calls the Feature 6 MCP tool. It never sends an HTTP request to Tavily itself.
   * **Write path:** The agent does not insert into the Event Store itself. It issues `EvaluateCandidateCommand`, and that command appends one `CandidateEvaluated` event.
 * **Logic / actions, in order:**
   1. Select each `ApplicationSubmitted` event that has no later `CandidateEvaluated` for the same `application_id`.
   2. Load that job's requirements.
   3. RAG: query `cv_embeddings` with the job requirements and score the semantic match against this candidate's CV vector.
   4. Through MCP, run a Tavily search for current industry expectations of those requirements and for public facts the CV names. Do not invent sources.
-  5. Ask local Ollama to judge fit using only the CV text, the RAG match, and the Tavily results. The report fields are strengths, weaknesses, missing information, and a final recommendation.
-  6. Issue `EvaluateCandidateCommand`. If RAG, Tavily, or the model call fails, append nothing.
-* **Expected output:**
-  * One `CandidateEvaluated` event on aggregate type `Application`. Payload: `application_id`, `job_id`, `email`, `status` (`recommended` or `not_recommended`), `score` (0–100), `strengths`, `weaknesses`, `missing_information`, `recommendation`, `semantic_match`, and `sources`.
-  * The HR job drill-down shows that assessment beside the applicant's name, email, and CV text.
+  5. Call `LLMProvider.evaluate` with only the CV text, the job requirements, the RAG match, and the Tavily results. The provider returns the JSON report below.
+  6. Validate the report. If a required key is missing, `status` is not one of the two allowed values, or `skill_breakdown` is empty, treat it as a model failure.
+  7. Issue `EvaluateCandidateCommand`. If RAG, Tavily, the model call, or validation fails, append nothing. The application stays pending for the next run.
+* **Expected output — evaluation report (JSON):**
+  ```json
+  {
+    "status": "recommended",
+    "score": 78,
+    "skill_breakdown": [
+      {"skill": "Python", "match": "met", "evidence": "5 years of Flask API work"},
+      {"skill": "Kubernetes", "match": "missing", "evidence": ""}
+    ],
+    "strengths": "...",
+    "weaknesses": "...",
+    "missing_information": "...",
+    "recommendation": "..."
+  }
+  ```
+  * `status`: `recommended` or `not_recommended`.
+  * `score`: the candidate match score, an integer from 0 to 100. Out-of-range values are clamped.
+  * `skill_breakdown`: one entry per skill named in the job requirements. `match` is `met`, `partial`, or `missing`. `evidence` quotes or paraphrases the CV and is empty when `match` is `missing`.
+  * `strengths`, `weaknesses`, `missing_information`, `recommendation`: the four fields Rule 4 requires. None may be empty.
+* **Expected output — event:**
+  * One `CandidateEvaluated` event on aggregate type `Application`. Payload: the report above plus `application_id`, `job_id`, `email`, `semantic_match` (0–1 RAG similarity), `sources` (Tavily URLs), and `provider` (`ollama` or `mock`).
+  * Events recorded before this change have no `skill_breakdown` or `provider`. The query model reads those as an empty breakdown and provider `ollama`. Old events are never rewritten.
+  * The HR job drill-down shows that assessment beside the applicant's name, email, and CV text, including the skill breakdown as a table. An assessment with `provider` `mock` is labelled "Mock evaluation — not a real model judgement".
   * The HR accept or reject decision is Feature 7. This agent does not make that decision.
 * **Tasks:**
   * Run the Deep Agent as an independent process.
+  * Add the `LLMProvider` interface with `OllamaProvider` and `MockLLMProvider`, selected by `LLM_PROVIDER`.
+  * Move the Feature 4 projector and the RAG query onto `LLMProvider.embed`, and stamp `embedding_provider` on each vector.
   * Implement the RAG query against `cv_embeddings`.
   * Call Tavily only through MCP.
+  * Add `skill_breakdown` and `provider` to the report, its validation, and `EvaluateCandidateCommand`.
   * Command: `EvaluateCandidateCommand` -> append `CandidateEvaluated`.
-  * Show the assessment on the HR job drill-down.
+  * Show the assessment and skill breakdown on the HR job drill-down.
 
 ## Feature 6: MCP Integration & Tools Definition
-* **Goal:** Set up the Model Context Protocol (MCP) and define required tools[cite: 1].
+* **Goal:** Give the evaluation agent its external and data capabilities through MCP tools the project owns, and check in the Skill and Rule files that guide the agents.
+* **MCP server:** One project MCP server, `screening-mcp`, built with MCP-Studio as the course requires. It runs over stdio and is started by the evaluation agent as a child process. Its source lives in `src/mcp_server/`. It is the only component that holds `TAVILY_API_KEY`.
+* **Tool 1 — `web_search`:**
+  * Input: `query` (string, required), `max_results` (integer, 1–10, default 5).
+  * Action: calls the Tavily Search API with `TAVILY_API_KEY`. This is the only place in the system that sends HTTP to Tavily.
+  * Output: a list of `{title, url, content}`.
+  * Errors: a missing key, an empty query, or a Tavily failure returns an MCP error result. The agent then appends nothing (Feature 5 step 7).
+  * Replaces the third-party `tavily-mcp` npm server the agent starts today.
+* **Tool 2 — `semantic_cv_match`:**
+  * Input: `application_id` (string, required), `requirements` (string, required).
+  * Action: read-only. Embeds `requirements` with the configured `LLMProvider`, loads that application's vector from `cv_embeddings`, and returns the cosine similarity.
+  * Output: `{application_id, semantic_match}` with `semantic_match` from 0 to 1.
+  * Errors: no stored vector, or a provider mismatch with that vector's `embedding_provider`, returns an MCP error result.
+  * Never writes to Chroma or the Event Store.
+* **CQRS boundary:** Both tools are read-only. No MCP tool appends events. The only write path stays `EvaluateCandidateCommand`.
+* **Configuration:** `TAVILY_API_KEY` in `.env`, documented in `.env.example`. A missing key makes `web_search` fail. It does not make the agent skip Tavily.
+* **Skill and Rule files in the workspace:**
+  * **Rule:** `.cursor/rules/sdad-cqrs.mdc`, always applied. It encodes Rule 1 (read the specs first, no ORM, no unapproved frameworks) and Rule 2 (commands only append, queries only read) from `rules.md` for the coding agent.
+  * **Custom Skill:** `.cursor/skills/evaluate-candidate-fit/SKILL.md`. It follows the workflow in `skills.md`: load the pending application, call `semantic_cv_match`, call `web_search`, produce the Feature 5 JSON report, and issue `EvaluateCandidateCommand`.
+  * **External Skill:** `tavily-research` from Skills.sh (`tavily-ai/skills`), installed with `npx skills add tavily-ai/skills --skill tavily-research` and kept at `.cursor/skills/tavily-research/SKILL.md`. `skills-lock.json` records its source and hash. It guides the coding agent's own research. It is not part of the evaluation agent's runtime, which reaches Tavily only through `web_search`.
 * **Tasks:**
-  * Use MCP-Studio to develop at least two custom MCP Tools[cite: 1].
-  * Integrate external services via MCP (e.g., Tavily.com for search, Gmail for notifications)[cite: 1].
-  * Define and implement at least one custom Skill and one external Skill from Skills.sh[cite: 1].
-  * Define the AI Rule(s)[cite: 1].
+  * Build `screening-mcp` in MCP-Studio with `web_search` and `semantic_cv_match`.
+  * Switch the agent from `tavily-mcp` and the in-process RAG query to these two tools.
+  * Add the Rule file, the custom Skill file, and the Skills.sh skill.
+  * Tests: each tool returns the documented output and errors, and neither tool appends events.
 
 ## Feature 7: HR Decision
-* **Goal:** Let HR accept or reject a candidate after reading the Feature 5 assessment.
+* **Goal:** Let HR accept or reject one application after reading it. The evaluation agent never makes this decision.
+* **Event:** `CandidateDecided` — aggregate type `Application`, same aggregate id as `ApplicationSubmitted`. Payload: `application_id`, `job_id`, `decision` (`accepted` or `rejected`), `decided_by` (the logged-in HR email). Appended by `DecideCandidateCommand`.
+* **Validation, before any write:**
+  * `decision` must be `accepted` or `rejected`. `decided_by` must be present.
+  * The `application_id` must already have an `ApplicationSubmitted` event. The command copies that event's `job_id` into the payload.
+  * A stream that already contains `CandidateDecided` is rejected. HR cannot change the decision. The event row is never updated or deleted.
+  * A decision does not require a `CandidateEvaluated` event. HR may decide while the assessment is still pending.
+* **UI:**
+  * The candidate page (`GET /hr/applications/<application_id>`) shows Accept and Reject when there is no decision yet. `POST /hr/applications/<application_id>/decision` runs the command. A candidate account gets 403.
+  * After a decision, the buttons are gone. The page, the job's applicant row, and the HR search results show `accepted` or `rejected`, and the page also shows `decided_by`.
+  * The candidate dashboard is unchanged. A decided application still shows Applied.
 * **Tasks:**
-  * Show the `CandidateEvaluated` assessment on the applicant row.
-  * Command: `DecideCandidateCommand` -> append `CandidateDecided` with `accepted` or `rejected`.
-  * The evaluation agent does not issue this command.
+  * Command: `DecideCandidateCommand` -> append `CandidateDecided`.
+  * Replay `CandidateDecided` in the HR job drill-down, the candidate page, and HR search.
+  * Accept and Reject on the candidate page only. The evaluation agent does not issue this command.
