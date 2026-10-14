@@ -1,3 +1,3 @@
-from src.integrations.tavily_mcp import McpError, TavilyMcpSearch
+from src.integrations.screening_mcp import McpError, ScreeningMcpClient
 
-__all__ = ["McpError", "TavilyMcpSearch"]
+__all__ = ["McpError", "ScreeningMcpClient"]

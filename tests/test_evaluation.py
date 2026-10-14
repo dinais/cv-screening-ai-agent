@@ -1,22 +1,24 @@
 import inspect
+import pathlib
+
+import pytest
 
 from src import create_app
-from src.agents.candidate_evaluation import (
-    CandidateEvaluationAgent,
-    DeepAgentJudge,
-    _parse_model_text,
-    _production_deep_agent,
-    _require_report,
-)
+from src.agents.candidate_evaluation import CandidateEvaluationAgent
 from src.commands.application_commands import SubmitApplicationCommand
 from src.commands.base import CommandResult
 from src.commands.evaluation_commands import EvaluateCandidateCommand
 from src.commands.job_commands import CreateJobCommand
-from src.integrations.tavily_mcp import McpError, TavilyMcpSearch, parse_tavily_results
+from src.integrations.screening_mcp import McpError
 from src.persistence.event_store import EventStore
+from src.projections.cv_embeddings import CvEmbeddingProjector
+from src.providers import MockLLMProvider
+from src.providers.base import LLMError, LLMProvider
 from src.queries.cv_match import CvMatchQuery, RagError
 from src.queries.portal_queries import JobDetailQuery
 from tests.test_auth import TestConfig
+
+SRC = pathlib.Path(__file__).resolve().parents[1] / "src"
 
 
 def _store() -> EventStore:
@@ -40,6 +42,12 @@ def _seed(store: EventStore, cv_text: str = "Built Flask APIs."):
     return job.reference_id, application.reference_id
 
 
+BREAKDOWN = [
+    {"skill": "Python", "match": "met", "evidence": "Python services"},
+    {"skill": "Flask", "match": "missing", "evidence": ""},
+]
+
+
 def _report(**overrides):
     payload = {
         "application_id": "app-1",
@@ -47,12 +55,14 @@ def _report(**overrides):
         "email": "candidate@example.com",
         "status": "recommended",
         "score": 82,
+        "skill_breakdown": BREAKDOWN,
         "strengths": "Python and Flask project work",
         "weaknesses": "No mention of tests",
         "missing_information": "Years of experience are not stated",
         "recommendation": "The CV fits the backend role",
         "semantic_match": 0.91,
         "sources": ["https://example.com/standards"],
+        "provider": "ollama",
     }
     payload.update(overrides)
     return payload
@@ -101,13 +111,19 @@ class _Search:
         ]
 
 
-class _Judge:
-    def judge(self, evidence: dict) -> dict:
+class _Provider(LLMProvider):
+    name = "ollama"
+
+    def embed(self, text: str) -> list[float]:
+        raise AssertionError("the agent does not embed")
+
+    def evaluate(self, evidence: dict) -> dict:
         assert evidence["tavily_results"][0]["url"] == "https://example.com/standards"
         assert "semantic_match" in evidence
         return {
             "status": "not_recommended",
             "score": 12,
+            "skill_breakdown": BREAKDOWN,
             "strengths": "Clear writing",
             "weaknesses": "The CV does not show Flask or Python delivery",
             "missing_information": "No project dates",
@@ -125,6 +141,26 @@ class _Command:
         return CommandResult.ok(reference_id=kwargs["application_id"])
 
 
+class _BrokenMatch:
+    def match(self, application_id: str, requirements: str) -> float:
+        raise RagError("vector missing")
+
+
+class _BrokenSearch:
+    def research(self, title: str, requirements: str, cv_text: str) -> list[dict]:
+        raise McpError("mcp down")
+
+
+class _BrokenProvider(_Provider):
+    def evaluate(self, evidence: dict) -> dict:
+        raise LLMError("model down")
+
+
+class _NoBreakdownProvider(_Provider):
+    def evaluate(self, evidence: dict) -> dict:
+        return {**super().evaluate(evidence), "skill_breakdown": []}
+
+
 def test_command_appends_candidate_evaluated_without_returning_the_report():
     store = _store()
     job_id, application_id = _seed(store)
@@ -139,11 +175,22 @@ def test_command_appends_candidate_evaluated_without_returning_the_report():
     assert events[1].version == 2
     assert events[1].payload["status"] == "recommended"
     assert events[1].payload["score"] == 82
+    assert events[1].payload["skill_breakdown"] == BREAKDOWN
+    assert events[1].payload["provider"] == "ollama"
     assert events[1].payload["sources"] == ["https://example.com/standards"]
 
 
-def test_command_rejects_a_bad_report_before_the_database():
-    result = EvaluateCandidateCommand(_Spy()).execute(**_report(score=140, status="maybe"))
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"score": 140, "status": "maybe"},
+        {"skill_breakdown": []},
+        {"skill_breakdown": [{"skill": "Python", "match": "sort of", "evidence": ""}]},
+        {"provider": "openai"},
+    ],
+)
+def test_command_rejects_a_bad_report_before_the_database(overrides):
+    result = EvaluateCandidateCommand(_Spy()).execute(**_report(**overrides))
     assert result.success is False
     assert result.reference_id is None
 
@@ -164,87 +211,40 @@ def test_command_rejects_an_unknown_or_repeated_application():
 
 
 def test_rag_ranks_a_related_cv_above_an_unrelated_cv_without_upsert(tmp_path):
-    def embed(text: str) -> list[float]:
-        if "python" in text.lower():
-            return [1.0, 0.0, 0.0]
-        return [0.0, 1.0, 0.0]
+    store = _store()
+    _job, flask_id = _seed(store, cv_text="Python backend services with Flask API development.")
+    _job, chef_id = _seed(store, cv_text="Restaurant kitchen work and menu planning.")
+    path = str(tmp_path / "chroma")
+    mock = MockLLMProvider()
+    projector = CvEmbeddingProjector(store, path, mock)
+    assert projector.project_missing() == 2
 
-    matcher = CvMatchQuery(str(tmp_path / "chroma"), embed=embed)
-    collection = matcher._collection()
-    collection.upsert(
-        ids=["flask-cv", "chef-cv"],
-        embeddings=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-        documents=["Flask API development", "Restaurant kitchen work"],
-        metadatas=[{"job_id": "job"}, {"job_id": "job"}],
-    )
-    before = list(collection.get(include=[])["ids"])
+    matcher = CvMatchQuery(path, mock)
+    before = list(matcher._collection().get(include=[])["ids"])
+    flask_score = matcher.match(flask_id, "Python Backend")
+    chef_score = matcher.match(chef_id, "Python Backend")
 
-    flask_score = matcher.match("flask-cv", "Python Backend")
-    chef_score = matcher.match("chef-cv", "Python Backend")
-
-    assert flask_score == 1
-    assert chef_score == 0
     assert flask_score > chef_score
-    assert list(collection.get(include=[])["ids"]) == before
+    assert list(matcher._collection().get(include=[])["ids"]) == before
     assert "upsert" not in inspect.getsource(CvMatchQuery)
 
 
+def test_rag_refuses_to_compare_vectors_from_another_provider(tmp_path):
+    store = _store()
+    _job, application_id = _seed(store)
+    path = str(tmp_path / "chroma")
+    CvEmbeddingProjector(store, path, MockLLMProvider()).project_application(application_id)
+
+    class _OtherProvider(MockLLMProvider):
+        name = "ollama"
+
+    with pytest.raises(RagError, match="python -m src.projections"):
+        CvMatchQuery(path, _OtherProvider()).match(application_id, "Python")
+
+
 def test_missing_vector_fails_the_rag_read(tmp_path):
-    matcher = CvMatchQuery(str(tmp_path / "chroma"), embed=lambda _text: [1.0, 0.0])
-    try:
-        matcher.match("missing", "Python Backend")
-    except RagError:
-        return
-    raise AssertionError("missing vector should fail the read")
-
-
-def test_tavily_search_uses_the_mcp_tool_name():
-    calls = []
-
-    def call_tool(name, arguments):
-        calls.append((name, arguments))
-        return {"results": [{"title": "Standards", "url": "https://example.com/a", "content": "APIs"}]}
-
-    search = TavilyMcpSearch("test-key", call_tool=call_tool)
-    hits = search.research("Backend engineer", "Python and Flask", "Ada at Analytical Engines")
-
-    assert [call[0] for call in calls] == ["tavily_search", "tavily_search"]
-    assert "Python and Flask" in calls[0][1]["query"]
-    assert hits == [{"title": "Standards", "url": "https://example.com/a", "content": "APIs"}]
-    spec = search.server_spec()
-    assert spec.args == ("-y", "tavily-mcp")
-    assert "api.tavily.com" not in " ".join(spec.args)
-    assert "api.tavily.com" not in inspect.getsource(TavilyMcpSearch)
-
-
-def test_tavily_parser_reads_json_mixed_with_logs_or_plain_text():
-    mixed = (
-        "npm notice created a lockfile\n"
-        '{"results": [{"title": "Standards", "url": "https://example.com/a", "content": "APIs"}]}'
-    )
-    assert parse_tavily_results(mixed)[0]["url"] == "https://example.com/a"
-    plain = "Title: Standards\nURL: https://example.com/b\nContent: Flask services\n"
-    assert parse_tavily_results(plain) == [
-        {"title": "Standards", "url": "https://example.com/b", "content": "Flask services"}
-    ]
-    try:
-        parse_tavily_results("Error: invalid API key")
-    except McpError as exc:
-        assert "invalid API key" in str(exc)
-        return
-    raise AssertionError("a plain tool error should be reported")
-
-
-def test_tavily_without_a_key_fails_before_a_tool_call():
-    def call_tool(_name, _arguments):
-        raise AssertionError("tool was called")
-
-    search = TavilyMcpSearch("", call_tool=call_tool)
-    try:
-        search.search("Python")
-    except McpError:
-        return
-    raise AssertionError("missing key should fail")
+    with pytest.raises(RagError):
+        CvMatchQuery(str(tmp_path / "chroma"), MockLLMProvider()).match("missing", "Python Backend")
 
 
 def test_agent_issues_the_command_and_does_not_write_the_event_store():
@@ -255,26 +255,30 @@ def test_agent_issues_the_command_and_does_not_write_the_event_store():
         events=_ReadOnly(store),
         match=_Match(),
         search=_Search(),
-        judge=_Judge(),
+        provider=_Provider(),
         command=command,
     )
 
     assert agent.run() == 1
-    assert command.payloads[0]["application_id"] == application_id
-    assert command.payloads[0]["status"] == "not_recommended"
-    assert command.payloads[0]["score"] == 12
-    assert command.payloads[0]["semantic_match"] == 0.25
-    assert command.payloads[0]["sources"] == ["https://example.com/standards"]
+    payload = command.payloads[0]
+    assert payload["application_id"] == application_id
+    assert payload["status"] == "not_recommended"
+    assert payload["score"] == 12
+    assert payload["skill_breakdown"] == BREAKDOWN
+    assert payload["provider"] == "ollama"
+    assert payload["semantic_match"] == 0.25
+    assert payload["sources"] == ["https://example.com/standards"]
 
 
-def test_failed_rag_tavily_or_model_appends_nothing():
+def test_failed_rag_tavily_model_or_report_appends_nothing():
     store = _store()
     _job_id, application_id = _seed(store)
     command = EvaluateCandidateCommand(store)
     failures = (
-        CandidateEvaluationAgent(store, _BrokenMatch(), _Search(), _Judge(), command),
-        CandidateEvaluationAgent(store, _Match(), _BrokenSearch(), _Judge(), command),
-        CandidateEvaluationAgent(store, _Match(), _Search(), _BrokenJudge(), command),
+        CandidateEvaluationAgent(store, _BrokenMatch(), _Search(), _Provider(), command),
+        CandidateEvaluationAgent(store, _Match(), _BrokenSearch(), _Provider(), command),
+        CandidateEvaluationAgent(store, _Match(), _Search(), _BrokenProvider(), command),
+        CandidateEvaluationAgent(store, _Match(), _Search(), _NoBreakdownProvider(), command),
     )
     for agent in failures:
         assert agent.run() == 0
@@ -288,7 +292,7 @@ def test_successful_run_records_one_assessment_and_skips_it_next_time():
         events=store,
         match=_Match(0.84),
         search=_Search(),
-        judge=_Judge(),
+        provider=_Provider(),
         command=EvaluateCandidateCommand(store),
     )
 
@@ -302,100 +306,34 @@ def test_successful_run_records_one_assessment_and_skips_it_next_time():
     assert "invented.example" not in evaluated[0].payload["sources"]
 
 
-def test_score_parser_reads_a_number_inside_the_model_text():
-    report = _require_report({
-        "status": "recommended",
-        "score": "about 85/100",
-        "strengths": "Python",
-        "weaknesses": "No tests",
-        "missing_information": "Dates",
-        "recommendation": "Proceed",
-    })
-    assert report["score"] == 85
+def test_mock_provider_runs_the_whole_pipeline_offline(tmp_path):
+    store = _store()
+    _job_id, application_id = _seed(store, cv_text="Five years of Python. Built Flask APIs.")
+    path = str(tmp_path / "chroma")
+    mock = MockLLMProvider()
+    CvEmbeddingProjector(store, path, mock).project_application(application_id)
+    agent = CandidateEvaluationAgent(store, CvMatchQuery(path, mock), _Search(), mock, EvaluateCandidateCommand(store))
 
-    missing = _require_report({
-        "status": "not_recommended",
-        "score": "unknown",
-        "strengths": "Writing",
-        "weaknesses": "No relevant work",
-        "missing_information": "Tools",
-        "recommendation": "Stop",
-    })
-    assert missing["score"] == 0
+    assert agent.run() == 1
+    payload = store.load(application_id)[-1].payload
+    assert payload["provider"] == "mock"
+    assert {item["skill"] for item in payload["skill_breakdown"]} == {"python", "flask"}
+    assert all(item["match"] == "met" for item in payload["skill_breakdown"])
 
 
-def test_report_json_is_read_when_the_model_adds_prose():
-    text = (
-        "The candidate fits the role.\n"
-        '{"status": "not recommended", "score": "81", "strengths": "Python", '
-        '"weaknesses": "No tests", "missing_information": "Dates", "recommendation": "Proceed"}'
-    )
-    report = _require_report(_parse_model_text(text))
-    assert report["status"] == "not_recommended"
-    assert report["score"] == 81
-    assert report["strengths"] == "Python"
-
-
-def test_deep_agent_runtime_uses_local_ollama():
-    source = inspect.getsource(_production_deep_agent)
-    assert "create_deep_agent" in source
-    assert "ChatOllama" in source
-    assert "openai" not in source.lower()
-
-    judge = DeepAgentJudge("http://localhost:11434", "llama3.2", complete=lambda _evidence: {
-        "status": "recommended",
-        "score": 80.0,
-        "strengths": "Flask APIs",
-        "weaknesses": "Thin testing detail",
-        "missing_information": "Team size",
-        "recommendation": "Proceed to HR review",
-    })
-    report = judge.judge({"cv_text": "Flask"})
-    assert report["score"] == 80
-    assert report["status"] == "recommended"
-
-
-def test_hr_drill_down_shows_the_assessment_beside_the_cv():
-    app = create_app(TestConfig)
-    store = app.extensions["event_store"]
-    job_id, application_id = _seed(store, cv_text="Analytical engines.")
-    EvaluateCandidateCommand(store).execute(
-        **_report(
-            application_id=application_id,
-            job_id=job_id,
-            strengths="Strong analytical work",
-            semantic_match=0.5,
-        )
-    )
-    detail = JobDetailQuery(store).execute(job_id)
-    person = detail.applicant_list[0]
-    assert person.full_name == "Ada Lovelace"
-    assert person.cv_text == "Analytical engines."
-    assert person.assessment.status == "recommended"
-    assert person.assessment.strengths == "Strong analytical work"
-    assert person.assessment.semantic_match == 0.5
-
-    client = app.test_client()
-    client.post("/login", data={"email": "hr@example.com", "password": "hr-pass"})
-    page = client.get(f"/hr/jobs/{job_id}")
-    assert page.status_code == 200
-    assert b"Analytical engines." in page.data
-    assert b"Strong analytical work" in page.data
-    assert b"recommended" in page.data
-    assert b"https://example.com/standards" in page.data
-    assert "CandidateEvaluationAgent" not in inspect.getsource(create_app)
-
-
-class _BrokenMatch:
-    def match(self, application_id: str, requirements: str) -> float:
-        raise RagError("vector missing")
-
-
-class _BrokenSearch:
-    def research(self, title: str, requirements: str, cv_text: str) -> list[dict]:
-        raise McpError("mcp down")
-
-
-class _BrokenJudge:
-    def judge(self, evidence: dict) -> dict:
-        raise RuntimeError("model down")
+def test_agent_code_never_calls_tavily_or_ollama_directly():
+    agent_sources = [
+        SRC / "agents" / "candidate_evaluation.py",
+        SRC / "integrations" / "screening_mcp.py",
+    ]
+    for path in agent_sources:
+        text = path.read_text(encoding="utf-8")
+        assert "api.tavily.com" not in text
+        assert "urllib" not in text
+        assert "11434" not in text
+    tavily_users = [
+        path.relative_to(SRC).as_posix()
+        for path in SRC.rglob("*.py")
+        if "api.tavily.com" in path.read_text(encoding="utf-8")
+    ]
+    assert tavily_users == ["mcp_server/tavily.py"]

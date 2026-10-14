@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from src.commands.base import CommandHandler, CommandResult
 from src.persistence.event_store import EventStore, InvalidEventError, StoredEvent
+from src.providers import PROVIDERS
 
 _STATUSES = {"recommended", "not_recommended"}
+_SKILL_MATCHES = {"met", "partial", "missing"}
 
 
 class EvaluateCandidateCommand(CommandHandler):
@@ -20,12 +22,14 @@ class EvaluateCandidateCommand(CommandHandler):
         email: str,
         status: str,
         score: int,
+        skill_breakdown: list[dict],
         strengths: str,
         weaknesses: str,
         missing_information: str,
         recommendation: str,
         semantic_match: float,
         sources: list[str],
+        provider: str,
     ) -> CommandResult:
         application_id = (application_id or "").strip()
         job_id = (job_id or "").strip()
@@ -38,6 +42,8 @@ class EvaluateCandidateCommand(CommandHandler):
         clean_score = _score(score)
         clean_match = _semantic_match(semantic_match)
         clean_sources = _sources(sources)
+        clean_breakdown = _skill_breakdown(skill_breakdown)
+        provider = (provider or "").strip().lower()
         if (
             not application_id
             or not job_id
@@ -46,6 +52,8 @@ class EvaluateCandidateCommand(CommandHandler):
             or clean_score is None
             or clean_match is None
             or clean_sources is None
+            or not clean_breakdown
+            or provider not in PROVIDERS
             or not strengths
             or not weaknesses
             or not missing_information
@@ -75,12 +83,14 @@ class EvaluateCandidateCommand(CommandHandler):
                     "email": email,
                     "status": status,
                     "score": clean_score,
+                    "skill_breakdown": clean_breakdown,
                     "strengths": strengths,
                     "weaknesses": weaknesses,
                     "missing_information": missing_information,
                     "recommendation": recommendation,
                     "semantic_match": clean_match,
                     "sources": clean_sources,
+                    "provider": provider,
                 },
             )
         except InvalidEventError as exc:
@@ -110,6 +120,22 @@ def _semantic_match(value: object) -> float | None:
     if match < -1 or match > 1:
         return None
     return round(match, 4)
+
+
+def _skill_breakdown(value: object) -> list[dict] | None:
+    if not isinstance(value, list) or not value:
+        return None
+    cleaned: list[dict] = []
+    for item in value:
+        if not isinstance(item, dict):
+            return None
+        skill = str(item.get("skill") or "").strip()
+        match = str(item.get("match") or "").strip().lower()
+        evidence = item.get("evidence", "")
+        if not skill or match not in _SKILL_MATCHES or not isinstance(evidence, str):
+            return None
+        cleaned.append({"skill": skill, "match": match, "evidence": "" if match == "missing" else evidence.strip()})
+    return cleaned
 
 
 def _sources(value: object) -> list[str] | None:
