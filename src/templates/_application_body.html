@@ -1,0 +1,46 @@
+<div class="expand-panel">
+  <section class="split">
+    <article class="card">
+      <h2>Candidate</h2>
+      <dl class="detail-list">
+        <dt>Name</dt>
+        <dd>{{ person.full_name }}</dd>
+        <dt>Email</dt>
+        <dd>{{ person.email }}</dd>
+        <dt>Application id</dt>
+        <dd class="muted">{{ person.application_id }}</dd>
+      </dl>
+      <h2>CV</h2>
+      <p class="cv-text">{{ person.cv_text }}</p>
+    </article>
+    <article class="card">
+      <h2>Job requirements</h2>
+      <p class="prose">{{ requirements }}</p>
+    </article>
+  </section>
+  <section class="card">
+    <h2>HR decision</h2>
+    {% if person.decision %}
+      <p>{% include "_decision.html" %}</p>
+      <p class="muted">Decided by {{ person.decided_by }}</p>
+    {% else %}
+      <p class="muted">No decision yet. The AI assessment does not decide this.</p>
+      <form class="decision-form" method="post" action="{{ url_for('hr.decide_application', application_id=person.application_id) }}">
+        {% if inline %}
+          <input type="hidden" name="return_to" value="{{ return_to }}">
+          {% if search_query %}
+            <input type="hidden" name="q" value="{{ search_query }}">
+          {% endif %}
+        {% endif %}
+        <button type="submit" class="button primary" name="decision" value="accepted">Accept</button>
+        <button type="submit" class="button reject" name="decision" value="rejected">Reject</button>
+      </form>
+    {% endif %}
+  </section>
+  <section class="card assessment-card">
+    <h2>AI assessment</h2>
+    <div class="assessment">
+      {% with assessment = person.assessment %}{% include "_assessment.html" %}{% endwith %}
+    </div>
+  </section>
+</div>

@@ -1,0 +1,48 @@
+{% if job.applicant_list %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Email</th>
+          <th>CV</th>
+          <th>Assessment</th>
+          <th>Decision</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for person in job.applicant_list %}
+          {% set panel_id = panel_prefix ~ person.application_id %}
+          {% set panel_group = "apps-" ~ panel_prefix %}
+          {% set panel_open = request.args.get("application") == person.application_id %}
+          {% set review_id = "review-" ~ panel_id %}
+          {% set detail_url = url_for('hr.application_detail', application_id=person.application_id) %}
+          <tr>
+            <td>{{ person.full_name }}</td>
+            <td>{{ person.email }}</td>
+            <td class="clip-cell">{% with text = person.cv_text %}{% include "_text_clip.html" %}{% endwith %}</td>
+            <td>{% include "_assessment_trigger.html" %}</td>
+            <td>{% include "_decision.html" %}</td>
+            <td>{% include "_row_actions.html" %}</td>
+          </tr>
+          <tr id="{{ panel_id }}" class="panel-row" {% if not panel_open %}hidden{% endif %}>
+            <td colspan="6">
+              {% set requirements = job.requirements %}
+              {% set inline = true %}
+              {% include "_application_body.html" %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% for person in job.applicant_list %}
+    {% set panel_id = panel_prefix ~ person.application_id %}
+    {% set review_id = "review-" ~ panel_id %}
+    {% set detail_url = url_for('hr.application_detail', application_id=person.application_id) %}
+    {% include "_review_drawer.html" %}
+  {% endfor %}
+{% else %}
+  <p class="empty">No applicants yet.</p>
+{% endif %}

@@ -2,7 +2,12 @@
   {% if assessment.provider == 'mock' %}
     <p class="mock-label">Mock evaluation — not a real model judgement</p>
   {% endif %}
-  <p class="status-{{ assessment.status }}">{{ assessment.status }} · {{ assessment.score }}/100</p>
+  <p>
+    <span class="badge badge-{{ assessment.status }} status-{{ assessment.status }}">
+      {% if assessment.status == "recommended" %}Recommended{% elif assessment.status == "not_recommended" %}Not recommended{% else %}{{ assessment.status }}{% endif %}
+      · {{ assessment.score }}/100
+    </span>
+  </p>
   {% if assessment.skill_breakdown %}
     <table class="skill-table">
       <thead>
@@ -25,7 +30,7 @@
   <p><span class="muted">Recommendation.</span> {{ assessment.recommendation }}</p>
   <p><span class="muted">Semantic match.</span> {{ "%.2f"|format(assessment.semantic_match) }}</p>
   {% if assessment.sources %}
-    <details>
+    <details class="sources">
       <summary>Sources ({{ assessment.sources|length }})</summary>
       <ul>
         {% for source in assessment.sources %}
@@ -35,5 +40,5 @@
     </details>
   {% endif %}
 {% else %}
-  <span class="muted">Not evaluated</span>
+  <span class="badge badge-muted">Not evaluated</span>
 {% endif %}

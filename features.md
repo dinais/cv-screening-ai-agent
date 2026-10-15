@@ -29,17 +29,17 @@ This document breaks down the system development into distinct, incrementally de
   * The read side loads `JobCreated` and `ApplicationSubmitted` from the Event Store in order and replays them. It does not update or delete rows.
   * Each `JobCreated` becomes an open job with status Open. A later `JobClosed` for that `job_id` changes the replayed status to Closed.
   * Each `ApplicationSubmitted` is attached to that job, increases its applicant count, and records that applicant's `full_name`, `email`, and `cv_text`.
-  * The HR dashboard shows the open-job count, the applicant count for open jobs only, and a table of open jobs. A closed job is left out of that table, the counts, and HR search. `GET /hr/jobs/<job_id>` still shows a closed job, with status Closed, so its applicants and assessments remain reachable by id.
-  * The HR job drill-down shows the requirements, the applicant count, and the list of applicants (`full_name`, `email`, and `cv_text`).
-  * The candidate dashboard lists open jobs only. A closed job is not listed and its apply URL returns 404. `SubmitApplicationCommand` also rejects a closed job before any write. The query takes the logged-in candidate's email. A job with no `ApplicationSubmitted` for that email is marked not applied. A job that already has one is marked applied.
+  * The HR dashboard shows the open-job count, the applicant count for open jobs only, and a table of open jobs. A closed job is left out of that table, the counts, and HR search. `GET /hr/jobs/<job_id>` still shows a closed job, with status Closed, so its applicants and assessments remain reachable by id. "Create new job" opens the create-job form in a dialog. The form still posts to `POST /hr/jobs`. A failed create returns to the dashboard and reopens that dialog.
+  * The HR job drill-down shows the requirements, the applicant count, and the list of applicants (`full_name`, `email`, and `cv_text`). In that table, a long `cv_text` is truncated with an ellipsis and can be expanded in the row. On the dashboard, View on a job expands that job across the page: requirements and applicants. A second click collapses it. View on an applicant, in that expansion and in search results, expands the full application across the page: CV, requirements, assessment, and decision. A second click collapses it. Nothing is written. New tab still opens `GET /hr/jobs/<job_id>` or `GET /hr/applications/<application_id>`. The assessment badge still opens the shorter slide-over.
+  * The candidate dashboard lists open jobs only. A closed job is not listed and its apply URL returns 404. `SubmitApplicationCommand` also rejects a closed job before any write. The query takes the logged-in candidate's email. A job with no `ApplicationSubmitted` for that email is marked not applied. A job that already has one is marked applied. Each row shows the title, a truncated requirements preview, and an Open or Applied badge. The same badge styling is used on the HR screens.
 * **Search (HR):**
   * The HR dashboard has a search box. It submits `GET /hr/?q=<text>`. Nothing is written.
   * Matching is a case-insensitive substring match on the replayed state. A job matches when `q` is in its `title` or `requirements`. An applicant matches when `q` is in `full_name`, `email`, or `cv_text`.
-  * With a non-empty `q`, the jobs table shows only matching jobs, and a "Matching applicants" table lists each matching applicant with name, email, job title, and assessment status. The stat cards still show the totals.
+  * With a non-empty `q`, the jobs table shows only matching jobs, and a "Matching applicants" table lists each matching applicant with name, email, job title, and assessment status. Full CV text and the assessment narrative stay out of that row. View expands them on this page; New tab opens the application page. The stat cards still show the totals.
   * An empty or blank `q` shows the normal dashboard with no applicants table.
 * **Candidate drill-down (HR):**
   * `GET /hr/applications/<application_id>` shows one application: the job title (linked to the job drill-down), the job requirements, the applicant's `full_name`, `email`, and `cv_text`, and the Feature 5 assessment when there is one.
-  * Every applicant row on the job drill-down and in the search results opens this page when clicked.
+  * View on an applicant expands this same content on the dashboard or job page. New tab, and a direct request, still open this page. Clicking the row does not leave the list.
   * An unknown `application_id` returns 404. A candidate account gets 403.
 * **Tasks:**
   * HR form to create a job, the jobs table, and the drill-down fed by the projection.
@@ -116,7 +116,7 @@ This document breaks down the system development into distinct, incrementally de
 * **Expected output — event:**
   * One `CandidateEvaluated` event on aggregate type `Application`. Payload: the report above plus `application_id`, `job_id`, `email`, `semantic_match` (0–1 RAG similarity), `sources` (Tavily URLs), and `provider` (`ollama` or `mock`).
   * Events recorded before this change have no `skill_breakdown` or `provider`. The query model reads those as an empty breakdown and provider `ollama`. Old events are never rewritten.
-  * The HR job drill-down shows that assessment beside the applicant's name, email, and CV text, including the skill breakdown as a table. An assessment with `provider` `mock` is labelled "Mock evaluation — not a real model judgement".
+  * The HR job drill-down shows an assessment status badge beside the applicant's name, email, and truncated CV. The skill breakdown table and the narrative fields open in a slide-over on that page and in full on the application page. An assessment with `provider` `mock` is labelled "Mock evaluation — not a real model judgement".
   * The HR accept or reject decision is Feature 7. This agent does not make that decision.
 * **Tasks:**
   * Run the Deep Agent as an independent process.

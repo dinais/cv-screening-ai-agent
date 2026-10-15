@@ -1,0 +1,4 @@
+<div class="row-actions">
+  <button type="button" class="button small" data-toggle-panel="{{ panel_id }}" data-toggle-group="{{ panel_group }}" aria-expanded="{{ 'true' if panel_open else 'false' }}" aria-controls="{{ panel_id }}">{% if panel_open %}Hide{% else %}View{% endif %}</button>
+  <a class="button small" href="{{ detail_url }}" target="_blank" rel="noopener noreferrer">New tab</a>
+</div>

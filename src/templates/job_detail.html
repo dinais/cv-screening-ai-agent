@@ -5,7 +5,6 @@
   <div>
     <p class="eyebrow">Job</p>
     <h1>{{ job.title }}</h1>
-    <p class="muted"><a href="{{ url_for('hr.portal') }}">Back to dashboard</a></p>
   </div>
   {% if job.status == "Open" %}
     <form method="post" action="{{ url_for('hr.close_job', job_id=job.job_id) }}">
@@ -17,7 +16,7 @@
 <section class="stat-row">
   <article class="stat-card">
     <span class="stat-label">Status</span>
-    <strong class="stat-value">{{ job.status }}</strong>
+    <strong class="stat-value stat-text">{{ job.status }}</strong>
   </article>
   <article class="stat-card">
     <span class="stat-label">Applicants</span>
@@ -27,41 +26,14 @@
 
 <section class="card">
   <h2>Requirements</h2>
-  <p>{{ job.requirements }}</p>
+  <p class="prose">{{ job.requirements }}</p>
 </section>
 
 <section class="card">
   <h2>Applicants</h2>
-  {% if job.applicant_list %}
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Email</th>
-            <th>CV</th>
-            <th>Assessment</th>
-            <th>Decision</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for person in job.applicant_list %}
-            {% set detail_url = url_for('hr.application_detail', application_id=person.application_id) %}
-            <tr class="row-link" data-href="{{ detail_url }}">
-              <td><a href="{{ detail_url }}">{{ person.full_name }}</a></td>
-              <td>{{ person.email }}</td>
-              <td class="cv-text">{{ person.cv_text }}</td>
-              <td class="assessment">
-                {% with assessment = person.assessment %}{% include "_assessment.html" %}{% endwith %}
-              </td>
-              <td>{% include "_decision.html" %}</td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  {% else %}
-    <p class="empty">No applicants yet.</p>
-  {% endif %}
+  {% set panel_prefix = "app-page-" %}
+  {% set return_to = "job" %}
+  {% set search_query = "" %}
+  {% include "_applicants_table.html" %}
 </section>
 {% endblock %}

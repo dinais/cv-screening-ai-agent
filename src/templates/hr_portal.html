@@ -5,8 +5,9 @@
   <div>
     <p class="eyebrow">HR workspace</p>
     <h1>Hiring dashboard</h1>
-    <p class="muted">Each row is an open job. The applicant count is rebuilt from submitted applications.</p>
+    <p class="muted">Open roles and the people who applied. Counts are rebuilt from submitted applications.</p>
   </div>
+  <button type="button" class="button primary" data-open-dialog="create-job">Create new job</button>
 </section>
 
 <section class="stat-row">
@@ -18,21 +19,6 @@
     <span class="stat-label">Registered applicants</span>
     <strong class="stat-value">{{ portal.applicants }}</strong>
   </article>
-</section>
-
-<section class="card">
-  <h2>Create a job</h2>
-  <form class="form" method="post" action="{{ url_for('hr.create_job') }}">
-    <label>
-      Role title
-      <input type="text" name="title" required maxlength="200">
-    </label>
-    <label>
-      Requirements
-      <textarea name="requirements" required rows="5"></textarea>
-    </label>
-    <button type="submit" class="button primary">Publish job</button>
-  </form>
 </section>
 
 <section class="card">
@@ -50,7 +36,7 @@
 <section class="card">
   <h2>Matching applicants</h2>
   <div class="table-wrap">
-    <table>
+    <table class="data-table">
       <thead>
         <tr>
           <th>Name</th>
@@ -58,41 +44,60 @@
           <th>Job</th>
           <th>Assessment</th>
           <th>Decision</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
         {% if portal.matches %}
           {% for match in portal.matches %}
-            {% set detail_url = url_for('hr.application_detail', application_id=match.applicant.application_id) %}
-            <tr class="row-link" data-href="{{ detail_url }}">
-              <td><a href="{{ detail_url }}">{{ match.applicant.full_name }}</a></td>
-              <td>{{ match.applicant.email }}</td>
+            {% set person = match.applicant %}
+            {% set panel_id = "app-search-" ~ person.application_id %}
+            {% set panel_group = "apps-search" %}
+            {% set panel_open = request.args.get("application") == person.application_id %}
+            {% set review_id = "review-" ~ panel_id %}
+            {% set detail_url = url_for('hr.application_detail', application_id=person.application_id) %}
+            <tr>
+              <td>{{ person.full_name }}</td>
+              <td>{{ person.email }}</td>
               <td>{{ match.job_title }}</td>
-              <td>
-                {% if match.applicant.assessment %}
-                  <span class="status-{{ match.applicant.assessment.status }}">{{ match.applicant.assessment.status }} · {{ match.applicant.assessment.score }}/100</span>
-                {% else %}
-                  <span class="muted">Not evaluated</span>
-                {% endif %}
+              <td>{% include "_assessment_trigger.html" %}</td>
+              <td>{% include "_decision.html" %}</td>
+              <td>{% include "_row_actions.html" %}</td>
+            </tr>
+            <tr id="{{ panel_id }}" class="panel-row" {% if not panel_open %}hidden{% endif %}>
+              <td colspan="6">
+                {% set requirements = match.requirements %}
+                {% set inline = true %}
+                {% set return_to = "portal" %}
+                {% set search_query = portal.search %}
+                {% include "_application_body.html" %}
               </td>
-              <td>{% with person = match.applicant %}{% include "_decision.html" %}{% endwith %}</td>
             </tr>
           {% endfor %}
         {% else %}
           <tr>
-            <td colspan="5" class="empty">No applicants match “{{ portal.search }}”.</td>
+            <td colspan="6" class="empty">No applicants match “{{ portal.search }}”.</td>
           </tr>
         {% endif %}
       </tbody>
     </table>
   </div>
+  {% for match in portal.matches %}
+    {% set person = match.applicant %}
+    {% set panel_id = "app-search-" ~ person.application_id %}
+    {% set review_id = "review-" ~ panel_id %}
+    {% set detail_url = url_for('hr.application_detail', application_id=person.application_id) %}
+    {% include "_review_drawer.html" %}
+  {% endfor %}
 </section>
 {% endif %}
 
 <section class="card">
-  <h2>{% if portal.search %}Matching jobs{% else %}Jobs{% endif %}</h2>
+  <div class="section-head">
+    <h2>{% if portal.search %}Matching jobs{% else %}Jobs{% endif %}</h2>
+  </div>
   <div class="table-wrap">
-    <table>
+    <table class="data-table">
       <thead>
         <tr>
           <th>Role</th>
@@ -104,14 +109,40 @@
       <tbody>
         {% if portal.jobs %}
           {% for job in portal.jobs %}
+            {% set job_url = url_for('hr.job_detail', job_id=job.job_id) %}
+            {% set panel_id = "job-" ~ job.job_id %}
+            {% set panel_open = request.args.get("job") == job.job_id %}
             <tr>
-              <td><a href="{{ url_for('hr.job_detail', job_id=job.job_id) }}">{{ job.title }}</a></td>
-              <td>{{ job.status }}</td>
+              <td>
+                <button type="button" class="row-toggle" data-toggle-panel="{{ panel_id }}" data-toggle-group="jobs" aria-expanded="{{ 'true' if panel_open else 'false' }}" aria-controls="{{ panel_id }}">{{ job.title }}</button>
+              </td>
+              <td><span class="badge badge-open">{{ job.status }}</span></td>
               <td>{{ job.applicants }}</td>
               <td>
-                <form method="post" action="{{ url_for('hr.close_job', job_id=job.job_id) }}">
-                  <button type="submit" class="button reject">Close</button>
-                </form>
+                <div class="row-actions">
+                  <button type="button" class="button small" data-toggle-panel="{{ panel_id }}" data-toggle-group="jobs" aria-expanded="{{ 'true' if panel_open else 'false' }}" aria-controls="{{ panel_id }}">{% if panel_open %}Hide{% else %}View{% endif %}</button>
+                  <a class="button small" href="{{ job_url }}" target="_blank" rel="noopener noreferrer">New tab</a>
+                  <form method="post" action="{{ url_for('hr.close_job', job_id=job.job_id) }}">
+                    <button type="submit" class="button small reject">Close</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            <tr id="{{ panel_id }}" class="panel-row" {% if not panel_open %}hidden{% endif %}>
+              <td colspan="4">
+                <div class="expand-panel">
+                  <article class="card">
+                    <h2>Requirements</h2>
+                    <p class="prose">{{ job.requirements }}</p>
+                  </article>
+                  <article class="card">
+                    <h2>Applicants</h2>
+                    {% set panel_prefix = "app-job-" ~ job.job_id ~ "-" %}
+                    {% set return_to = "portal" %}
+                    {% set search_query = portal.search %}
+                    {% include "_applicants_table.html" %}
+                  </article>
+                </div>
               </td>
             </tr>
           {% endfor %}
@@ -121,11 +152,35 @@
           </tr>
         {% else %}
           <tr>
-            <td colspan="4" class="empty">No jobs yet. Publish a role with the form above.</td>
+            <td colspan="4" class="empty">No jobs yet. Create a new job to publish a role.</td>
           </tr>
         {% endif %}
       </tbody>
     </table>
   </div>
 </section>
+
+<dialog class="modal" id="create-job" aria-labelledby="create-job-title" {% if request.args.get('create') %}data-open-on-load{% endif %}>
+  <form class="form modal-form" method="post" action="{{ url_for('hr.create_job') }}">
+    <div class="modal-head">
+      <div>
+        <p class="eyebrow">New role</p>
+        <h2 id="create-job-title">Create new job</h2>
+      </div>
+      <button type="button" class="icon-button" data-close-dialog aria-label="Close">×</button>
+    </div>
+    <label>
+      Role title
+      <input type="text" name="title" required maxlength="200">
+    </label>
+    <label>
+      Requirements
+      <textarea name="requirements" required rows="6" placeholder="Skills, experience, and anything the assessment should check"></textarea>
+    </label>
+    <div class="form-actions">
+      <button type="button" class="button" data-close-dialog>Cancel</button>
+      <button type="submit" class="button primary">Publish job</button>
+    </div>
+  </form>
+</dialog>
 {% endblock %}

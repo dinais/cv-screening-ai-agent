@@ -24,7 +24,7 @@ def create_job():
     )
     if not result.success:
         flash(result.message, "error")
-        return redirect(url_for("hr.portal"))
+        return redirect(url_for("hr.portal", create=1))
     flash("Job created.", "info")
     return redirect(url_for("hr.job_detail", job_id=result.reference_id))
 
@@ -68,6 +68,16 @@ def decide_application(application_id):
         decided_by=g.current_user.email,
     )
     flash(result.message if not result.success else "Decision recorded.", "error" if not result.success else "info")
-    if current_app.extensions["queries"]["application_detail"].execute(application_id) is None:
+    application = current_app.extensions["queries"]["application_detail"].execute(application_id)
+    if application is None:
         return redirect(url_for("hr.portal"))
+    return_to = request.form.get("return_to", "")
+    search = (request.form.get("q") or "").strip()
+    if return_to == "portal":
+        target = {"job": application.job_id, "application": application_id}
+        if search:
+            target["q"] = search
+        return redirect(url_for("hr.portal", **target))
+    if return_to == "job":
+        return redirect(url_for("hr.job_detail", job_id=application.job_id, application=application_id))
     return redirect(url_for("hr.application_detail", application_id=application_id))

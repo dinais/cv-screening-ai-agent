@@ -1,0 +1,10 @@
+<button type="button" class="badge-trigger" data-open-dialog="{{ review_id }}" aria-haspopup="dialog" aria-label="Open CV and assessment for {{ person.full_name }}">
+  {% if person.assessment %}
+    <span class="badge badge-{{ person.assessment.status }} status-{{ person.assessment.status }}">
+      {% if person.assessment.status == "recommended" %}Recommended{% elif person.assessment.status == "not_recommended" %}Not recommended{% else %}{{ person.assessment.status }}{% endif %}
+      · {{ person.assessment.score }}/100
+    </span>
+  {% else %}
+    <span class="badge badge-muted">Not evaluated</span>
+  {% endif %}
+</button>

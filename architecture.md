@@ -16,7 +16,7 @@ The application follows a strict CQRS organization as depicted in the system dia
 * **UI / Presentation:** The frontend layer where the user makes a change[cite: 1].
 * **API Gateway / Routing:** Routes change information to the Command Model[cite: 1].
 * **Command Model (Write):** Executes validations and consequential business logic[cite: 1]. It handles user actions (e.g., "Submit Application", "Create Job") and updates the database[cite: 1].
-* **Query Model (Read):** Reads from the database to populate the UI (e.g., Dashboard, Candidates List)[cite: 1]. It does not modify data. HR search (`GET /hr/?q=`) and the single-application drill-down (`GET /hr/applications/<application_id>`) are queries over the same replayed state.
+* **Query Model (Read):** Reads from the database to populate the UI (e.g., Dashboard, Candidates List)[cite: 1]. It does not modify data. HR search (`GET /hr/?q=`) and the single-application drill-down (`GET /hr/applications/<application_id>`) are queries over the same replayed state. The dashboard opens job creation in a dialog that still posts to `POST /hr/jobs`. Applicant tables show a truncated CV and an assessment badge. View expands the job or the full application on the same page; a second click collapses it. New tab and the assessment badge still open the drill-down page and the slide-over.
 
 ### 3.2. Event Sourcing
 Instead of storing only the current state of an entity (e.g., Candidate status = "Evaluated"), the relational database acts as an Append-Only Event Store[cite: 1]. 

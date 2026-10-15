@@ -5,51 +5,23 @@
   <div>
     <p class="eyebrow">Application</p>
     <h1>{{ application.applicant.full_name }}</h1>
-    <p class="muted">
-      Applied for <a href="{{ url_for('hr.job_detail', job_id=application.job_id) }}">{{ application.job_title }}</a>
-      · <a href="{{ url_for('hr.portal') }}">Back to dashboard</a>
-    </p>
+    <p class="muted">Applied for <a href="{{ url_for('hr.job_detail', job_id=application.job_id) }}">{{ application.job_title }}</a></p>
+  </div>
+  <div class="badge-row">
+    {% with person = application.applicant %}{% include "_decision.html" %}{% endwith %}
+    {% if application.applicant.assessment %}
+      <span class="badge badge-{{ application.applicant.assessment.status }} status-{{ application.applicant.assessment.status }}">
+        {% if application.applicant.assessment.status == "recommended" %}Recommended{% elif application.applicant.assessment.status == "not_recommended" %}Not recommended{% else %}{{ application.applicant.assessment.status }}{% endif %}
+        · {{ application.applicant.assessment.score }}/100
+      </span>
+    {% else %}
+      <span class="badge badge-muted">Not evaluated</span>
+    {% endif %}
   </div>
 </section>
 
-<section class="split">
-  <article class="card">
-    <h2>Candidate</h2>
-    <dl class="detail-list">
-      <dt>Name</dt>
-      <dd>{{ application.applicant.full_name }}</dd>
-      <dt>Email</dt>
-      <dd>{{ application.applicant.email }}</dd>
-      <dt>Application id</dt>
-      <dd class="muted">{{ application.applicant.application_id }}</dd>
-    </dl>
-    <h2>CV</h2>
-    <p class="cv-text">{{ application.applicant.cv_text }}</p>
-  </article>
-  <article class="card">
-    <h2>Job requirements</h2>
-    <p>{{ application.requirements }}</p>
-  </article>
-</section>
-
-<section class="card">
-  <h2>HR decision</h2>
-  {% if application.applicant.decision %}
-    <p class="decision-{{ application.applicant.decision }}">{{ application.applicant.decision }}</p>
-    <p class="muted">Decided by {{ application.applicant.decided_by }}</p>
-  {% else %}
-    <p class="muted">No decision yet. The AI assessment does not decide this.</p>
-    <form class="decision-form" method="post" action="{{ url_for('hr.decide_application', application_id=application.applicant.application_id) }}">
-      <button type="submit" class="button primary" name="decision" value="accepted">Accept</button>
-      <button type="submit" class="button reject" name="decision" value="rejected">Reject</button>
-    </form>
-  {% endif %}
-</section>
-
-<section class="card assessment-card">
-  <h2>AI assessment</h2>
-  <div class="assessment">
-    {% with assessment = application.applicant.assessment %}{% include "_assessment.html" %}{% endwith %}
-  </div>
-</section>
+{% set person = application.applicant %}
+{% set requirements = application.requirements %}
+{% set inline = false %}
+{% include "_application_body.html" %}
 {% endblock %}

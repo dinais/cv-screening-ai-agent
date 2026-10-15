@@ -1,5 +1,7 @@
-{% if person.decision %}
-  <span class="decision-{{ person.decision }}">{{ person.decision }}</span>
+{% if person.decision == "accepted" %}
+  <span class="badge badge-accepted decision-accepted">Accepted</span>
+{% elif person.decision == "rejected" %}
+  <span class="badge badge-rejected decision-rejected">Rejected</span>
 {% else %}
-  <span class="muted">Pending</span>
+  <span class="badge badge-pending">Pending</span>
 {% endif %}

@@ -1,0 +1,21 @@
+<dialog class="drawer" id="{{ review_id }}" aria-labelledby="review-title-{{ review_id }}">
+  <div class="drawer-head">
+    <div>
+      <p class="eyebrow">Application</p>
+      <h2 id="review-title-{{ review_id }}">{{ person.full_name }}</h2>
+      <p class="muted">{{ person.email }}</p>
+    </div>
+    <button type="button" class="icon-button" data-close-dialog aria-label="Close">×</button>
+  </div>
+  <div class="drawer-body">
+    <h3>CV</h3>
+    <p class="cv-text">{{ person.cv_text }}</p>
+    <h3>AI assessment</h3>
+    <div class="assessment">
+      {% with assessment = person.assessment %}{% include "_assessment.html" %}{% endwith %}
+    </div>
+    <p class="drawer-foot">
+      <button type="button" class="button small" data-open-panel="{{ panel_id }}">Open on this page</button>
+    </p>
+  </div>
+</dialog>
