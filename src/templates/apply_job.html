@@ -1,27 +1,40 @@
 {% extends "base.html" %}
 {% block title %}Apply · {{ job.title }}{% endblock %}
 {% block content %}
-<section class="page-header">
-  <div>
-    <p class="eyebrow">Application</p>
+<section class="apply-stage">
+  <aside class="apply-brief">
+    <a class="apply-back" href="{{ url_for('candidate.apply') }}">← Open positions</a>
+    <p class="eyebrow">Open role</p>
     <h1>{{ job.title }}</h1>
-    <p class="muted"><a href="{{ url_for('candidate.apply') }}">Back to open positions</a></p>
-  </div>
-</section>
+    <p class="apply-lead">Write to this role. Your name and CV are the whole application.</p>
+    <div class="apply-req">
+      <h2>What this role asks for</h2>
+      <p class="prose">{{ job.requirements }}</p>
+    </div>
+    <ol class="apply-steps">
+      <li><span>1</span> Your name</li>
+      <li><span>2</span> Your CV, as text</li>
+      <li><span>3</span> Submit once for this role</li>
+    </ol>
+  </aside>
 
-<section class="card">
-  <h2>Requirements</h2>
-  <p>{{ job.requirements }}</p>
-  <form class="form" method="post" action="{{ url_for('candidate.apply_to_job', job_id=job.job_id) }}">
+  <form class="apply-form" method="post" action="{{ url_for('candidate.apply_to_job', job_id=job.job_id) }}">
+    <div class="apply-form-head">
+      <h2>Your application</h2>
+      <p>Paste the experience you want read against the requirements.</p>
+    </div>
     <label>
       Full name
-      <input type="text" name="full_name" required maxlength="200">
+      <input type="text" name="full_name" required maxlength="200" autocomplete="name" placeholder="The name on your CV">
     </label>
-    <label>
+    <label class="apply-cv">
       CV
-      <textarea name="cv_text" required rows="8"></textarea>
+      <textarea name="cv_text" required placeholder="Roles, skills, and education. Plain text is enough."></textarea>
     </label>
-    <button type="submit" class="button primary">Submit application</button>
+    <div class="apply-submit">
+      <p>One application per role. You can edit nothing after it is sent.</p>
+      <button type="submit" class="button primary">Submit application</button>
+    </div>
   </form>
 </section>
 {% endblock %}
