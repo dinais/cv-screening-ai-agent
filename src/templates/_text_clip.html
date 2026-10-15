@@ -1,0 +1,10 @@
+{% if text|length > 140 %}
+<details class="clip">
+  <summary>
+    <span class="clip-preview">{{ text[:140] }}...</span>
+    <span class="clip-full cv-text">{{ text }}</span>
+  </summary>
+</details>
+{% else %}
+<span class="cv-text">{{ text }}</span>
+{% endif %}

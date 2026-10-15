@@ -5,28 +5,45 @@
   <div>
     <p class="eyebrow">Candidate workspace</p>
     <h1>Submit an application</h1>
-    <p class="muted">Choose an open role. Each application is stored as an event.</p>
+    <p class="muted">Open roles are listed below. Apply once for each role you want.</p>
   </div>
 </section>
 
 <section class="card">
   <h2>Open positions</h2>
   {% if portal.open_jobs %}
-    <ul class="job-list">
-      {% for job in portal.open_jobs %}
-        <li class="job-row">
-          <div>
-            <strong>{{ job.title }}</strong>
-            <span class="muted">{{ job.requirements }}</span>
-          </div>
-          {% if job.applied %}
-            <span class="applied-mark">Applied</span>
-          {% else %}
-            <a class="button primary" href="{{ url_for('candidate.apply_to_job', job_id=job.job_id) }}">Apply</a>
-          {% endif %}
-        </li>
-      {% endfor %}
-    </ul>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Role</th>
+            <th>Requirements</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for job in portal.open_jobs %}
+            <tr>
+              <td><strong>{{ job.title }}</strong></td>
+              <td class="clip-cell">{% with text = job.requirements %}{% include "_text_clip.html" %}{% endwith %}</td>
+              <td>
+                {% if job.applied %}
+                  <span class="badge badge-accepted applied-mark">Applied</span>
+                {% else %}
+                  <span class="badge badge-open">Open</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if not job.applied %}
+                  <a class="button primary" href="{{ url_for('candidate.apply_to_job', job_id=job.job_id) }}">Apply</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   {% else %}
     <p class="empty">There are no open positions to display yet.</p>
   {% endif %}
