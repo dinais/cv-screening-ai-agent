@@ -1,9 +1,10 @@
 """Independent candidate evaluation process.
 
-Run it with `python -m src.agents`. Flask does not import or start this process.
-The process reads events, gets the RAG match and Tavily results from the
-screening-mcp server, asks the configured LLMProvider for a report, and records
-the result only by issuing EvaluateCandidateCommand.
+Run it with `python -m src.agents`, or `python -m src.agents --job-id <job_id>`
+for one job. Flask may start that process from the HR dashboard. The request
+does not evaluate anyone. The process reads events, gets the RAG match and
+Tavily results from the screening-mcp server, asks the configured LLMProvider
+for a report, and records the result only by issuing EvaluateCandidateCommand.
 """
 
 from __future__ import annotations
@@ -54,9 +55,9 @@ class CandidateEvaluationAgent:
         self._provider = provider
         self._command = command
 
-    def run(self) -> int:
+    def run(self, job_id: str | None = None) -> int:
         recorded = 0
-        for item in select_pending(self._events):
+        for item in select_pending(self._events, only_job_id=job_id):
             try:
                 semantic_match = self._match.match(item.application_id, item.requirements)
                 hits = self._search.research(item.title, item.requirements, item.cv_text)
@@ -73,12 +74,15 @@ class CandidateEvaluationAgent:
         return recorded
 
 
-def select_pending(events: EventStore) -> list[PendingApplication]:
-    """Unevaluated applications whose job has not been closed."""
+def select_pending(events: EventStore, only_job_id: str | None = None) -> list[PendingApplication]:
+    """Unevaluated applications whose job has not been closed.
+
+    `only_job_id` limits the list to one job. A missing or closed job yields nothing.
+    """
     jobs: dict[str, dict] = {}
     for event in events.load_by_types(("JobCreated",)):
-        job_id = str(event.payload.get("job_id") or event.aggregate_id)
-        jobs[job_id] = event.payload
+        created_id = str(event.payload.get("job_id") or event.aggregate_id)
+        jobs[created_id] = event.payload
     closed = {
         str(event.payload.get("job_id") or event.aggregate_id)
         for event in events.load_by_types(("JobClosed",))
@@ -88,14 +92,16 @@ def select_pending(events: EventStore) -> list[PendingApplication]:
         application_id = str(event.payload.get("application_id") or event.aggregate_id)
         if _already_evaluated(events.load(application_id)):
             continue
-        job_id = str(event.payload.get("job_id") or "")
-        job = jobs.get(job_id)
-        if job is None or job_id in closed:
+        application_job_id = str(event.payload.get("job_id") or "")
+        if only_job_id and application_job_id != only_job_id:
+            continue
+        job = jobs.get(application_job_id)
+        if job is None or application_job_id in closed:
             continue
         pending.append(
             PendingApplication(
                 application_id=application_id,
-                job_id=job_id,
+                job_id=application_job_id,
                 title=str(job.get("title") or ""),
                 requirements=str(job.get("requirements") or ""),
                 full_name=str(event.payload.get("full_name") or ""),
@@ -145,14 +151,24 @@ def _payload(
     }
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
     from src.config import Config
     from src.integrations.screening_mcp import ScreeningMcpClient
     from src.providers import provider_from_config
 
+    parser = argparse.ArgumentParser(description="Evaluate applications that have no assessment yet.")
+    parser.add_argument("--job-id", default="", help="Evaluate pending applications for this job only.")
+    args = parser.parse_args(argv)
+    job_id = args.job_id.strip() or None
+
     logging.basicConfig(level=logging.INFO)
     provider = provider_from_config(Config)
-    logger.info("Evaluating with the %s provider.", provider.name)
+    if job_id:
+        logger.info("Evaluating job %s with the %s provider.", job_id, provider.name)
+    else:
+        logger.info("Evaluating every pending application with the %s provider.", provider.name)
     events = EventStore(Config.DATABASE_URL)
     events.ensure_schema()
     with ScreeningMcpClient() as tools:
@@ -163,6 +179,6 @@ def main() -> int:
             provider=provider,
             command=EvaluateCandidateCommand(events),
         )
-        recorded = agent.run()
+        recorded = agent.run(job_id)
     print(f"Recorded {recorded} CandidateEvaluated event(s).")
     return 0

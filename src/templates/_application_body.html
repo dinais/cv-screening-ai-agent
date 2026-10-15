@@ -11,7 +11,7 @@
         <dd class="muted">{{ person.application_id }}</dd>
       </dl>
       <h2>CV</h2>
-      <p class="cv-text">{{ person.cv_text }}</p>
+      {% include "_cv_link.html" %}
     </article>
     <article class="card">
       <h2>Job requirements</h2>

@@ -1,6 +1,8 @@
-from flask import Blueprint, abort, current_app, flash, g, redirect, render_template, request, url_for
+from flask import Blueprint, abort, current_app, flash, g, redirect, render_template, request, send_file, url_for
 
+from src.agents.launch import evaluation_running, start_evaluation
 from src.controllers.decorators import hr_required
+from src.cv_pdf import PdfError, cv_pdf_exists, cv_pdf_path
 
 hr_bp = Blueprint("hr", __name__, url_prefix="/hr")
 
@@ -10,7 +12,7 @@ hr_bp = Blueprint("hr", __name__, url_prefix="/hr")
 def portal():
     query = current_app.extensions["queries"]["hr_portal"]
     view = query.execute(request.args.get("q", ""))
-    return render_template("hr_portal.html", portal=view)
+    return render_template("hr_portal.html", portal=view, evaluation_running=evaluation_running)
 
 
 @hr_bp.route("/jobs", methods=["POST"])
@@ -29,6 +31,36 @@ def create_job():
     return redirect(url_for("hr.job_detail", job_id=result.reference_id))
 
 
+@hr_bp.route("/evaluate", methods=["POST"])
+@hr_required
+def evaluate_pending():
+    portal = current_app.extensions["queries"]["hr_portal"].execute()
+    if not any(_job_needs_evaluation(job) for job in portal.jobs):
+        flash("Nothing is waiting for an assessment.", "error")
+        return redirect(url_for("hr.portal"))
+    started, message = start_evaluation()
+    flash(message, "info" if started else "error")
+    return redirect(url_for("hr.portal"))
+
+
+@hr_bp.route("/jobs/<job_id>/evaluate", methods=["POST"])
+@hr_required
+def evaluate_job(job_id):
+    job = current_app.extensions["queries"]["job_detail"].execute(job_id)
+    if job is None:
+        abort(404)
+    if not _job_needs_evaluation(job):
+        flash("This job has no application waiting for an assessment.", "error")
+        return redirect(url_for("hr.job_detail", job_id=job_id))
+    started, message = start_evaluation(job_id)
+    flash(message, "info" if started else "error")
+    return redirect(url_for("hr.job_detail", job_id=job_id))
+
+
+def _job_needs_evaluation(job) -> bool:
+    return job.status == "Open" and any(person.assessment is None for person in job.applicant_list)
+
+
 @hr_bp.route("/jobs/<job_id>/close", methods=["POST"])
 @hr_required
 def close_job(job_id):
@@ -45,7 +77,7 @@ def job_detail(job_id):
     job = query.execute(job_id)
     if job is None:
         abort(404)
-    return render_template("job_detail.html", job=job)
+    return render_template("job_detail.html", job=job, evaluation_running=evaluation_running)
 
 
 @hr_bp.route("/applications/<application_id>")
@@ -56,6 +88,18 @@ def application_detail(application_id):
     if application is None:
         abort(404)
     return render_template("application_detail.html", application=application)
+
+
+@hr_bp.route("/applications/<application_id>/cv")
+@hr_required
+def application_cv(application_id):
+    if not cv_pdf_exists(application_id):
+        abort(404)
+    try:
+        path = cv_pdf_path(application_id)
+    except PdfError:
+        abort(404)
+    return send_file(path, mimetype="application/pdf", as_attachment=False, download_name="cv.pdf")
 
 
 @hr_bp.route("/applications/<application_id>/decision", methods=["POST"])

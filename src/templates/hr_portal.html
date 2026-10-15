@@ -7,7 +7,20 @@
     <h1>Hiring dashboard</h1>
     <p class="muted">Open roles and the people who applied. Counts are rebuilt from submitted applications.</p>
   </div>
-  <button type="button" class="button primary" data-open-dialog="create-job">Create new job</button>
+  <div class="page-actions">
+    {% set ns = namespace(pending=false) %}
+    {% for job in portal.jobs if job.status == 'Open' and job.applicant_list | selectattr('assessment', 'none') | list %}
+      {% set ns.pending = true %}
+    {% endfor %}
+    {% if ns.pending %}
+      <form method="post" action="{{ url_for('hr.evaluate_pending') }}">
+        <button type="submit" class="button" {% if evaluation_running() %}disabled{% endif %}>
+          {% if evaluation_running() %}Evaluation running{% else %}Evaluate pending{% endif %}
+        </button>
+      </form>
+    {% endif %}
+    <button type="button" class="button primary" data-open-dialog="create-job">Create new job</button>
+  </div>
 </section>
 
 <section class="stat-row">
@@ -122,6 +135,11 @@
                 <div class="row-actions">
                   <button type="button" class="button small" data-toggle-panel="{{ panel_id }}" data-toggle-group="jobs" aria-expanded="{{ 'true' if panel_open else 'false' }}" aria-controls="{{ panel_id }}">{% if panel_open %}Hide{% else %}View{% endif %}</button>
                   <a class="button small" href="{{ job_url }}" target="_blank" rel="noopener noreferrer">New tab</a>
+                  {% if job.status == "Open" and job.applicant_list | selectattr("assessment", "none") | list %}
+                    <form method="post" action="{{ url_for('hr.evaluate_job', job_id=job.job_id) }}">
+                      <button type="submit" class="button small" {% if evaluation_running() %}disabled{% endif %}>Evaluate</button>
+                    </form>
+                  {% endif %}
                   <form method="post" action="{{ url_for('hr.close_job', job_id=job.job_id) }}">
                     <button type="submit" class="button small reject">Close</button>
                   </form>

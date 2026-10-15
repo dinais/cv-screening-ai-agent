@@ -1,40 +1,33 @@
 {% extends "base.html" %}
 {% block title %}Apply · {{ job.title }}{% endblock %}
 {% block content %}
-<section class="apply-stage">
-  <aside class="apply-brief">
-    <a class="apply-back" href="{{ url_for('candidate.apply') }}">← Open positions</a>
+<section class="page-header">
+  <div>
     <p class="eyebrow">Open role</p>
     <h1>{{ job.title }}</h1>
-    <p class="apply-lead">Write to this role. Your name and CV are the whole application.</p>
-    <div class="apply-req">
-      <h2>What this role asks for</h2>
-      <p class="prose">{{ job.requirements }}</p>
-    </div>
-    <ol class="apply-steps">
-      <li><span>1</span> Your name</li>
-      <li><span>2</span> Your CV, as text</li>
-      <li><span>3</span> Submit once for this role</li>
-    </ol>
-  </aside>
+    <p class="muted"><a href="{{ url_for('candidate.apply') }}">Open positions</a></p>
+  </div>
+</section>
 
-  <form class="apply-form" method="post" action="{{ url_for('candidate.apply_to_job', job_id=job.job_id) }}">
-    <div class="apply-form-head">
-      <h2>Your application</h2>
-      <p>Paste the experience you want read against the requirements.</p>
-    </div>
+<div class="split">
+  <section class="card">
+    <h2>What this role asks for</h2>
+    <p class="prose">{{ job.requirements }}</p>
+  </section>
+
+  <form class="card form" method="post" enctype="multipart/form-data" action="{{ url_for('candidate.apply_to_job', job_id=job.job_id) }}">
+    <h2>Your application</h2>
+    <p class="muted">Upload the PDF you want read against the requirements.</p>
     <label>
       Full name
       <input type="text" name="full_name" required maxlength="200" autocomplete="name" placeholder="The name on your CV">
     </label>
-    <label class="apply-cv">
-      CV
-      <textarea name="cv_text" required placeholder="Roles, skills, and education. Plain text is enough."></textarea>
+    <label>
+      CV (PDF)
+      <input type="file" name="cv" accept="application/pdf,.pdf" required>
     </label>
-    <div class="apply-submit">
-      <p>One application per role. You can edit nothing after it is sent.</p>
-      <button type="submit" class="button primary">Submit application</button>
-    </div>
+    <p class="hint">One application per role. You cannot change it after it is sent.</p>
+    <button type="submit" class="button primary">Submit application</button>
   </form>
-</section>
+</div>
 {% endblock %}

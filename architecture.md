@@ -7,7 +7,7 @@ The system is built as a modular web application driven by a Flask backend[cite:
 * **Backend Framework:** Python with Flask[cite: 1].
 * **Relational Database / Cloud:** Cloud-hosted SQL database (e.g., Somee.com) for event persistence[cite: 1].
 * **Vector Database:** ChromaDB, persisted at `VECTOR_DB_PATH`. Each CV embedding is produced from the plain `cv_text` on an `ApplicationSubmitted` event through `LLMProvider.embed` (section 3.4). By default that is local Ollama (`ollama + Docker`) at `http://localhost:11434` with the model `nomic-embed-text`.
-* **AI Infrastructure:** Deep Agent framework running as a separate process. Model calls go through `LLMProvider`. The default `OllamaProvider` uses local Ollama in Docker (`llama3.2` for evaluation, `nomic-embed-text` for embeddings). `MockLLMProvider` covers development machines with no Ollama. No OpenAI call.
+* **AI Infrastructure:** Deep Agent framework running as a separate process. HR starts it from the dashboard with `python -m src.agents` for every pending application, or `python -m src.agents --job-id <job_id>` for one job. The web request does not evaluate. Model calls go through `LLMProvider`. The default `OllamaProvider` uses local Ollama in Docker (`llama3.2` for evaluation, `nomic-embed-text` for embeddings). `MockLLMProvider` covers development machines with no Ollama. No OpenAI call.
 * **Integration Protocol:** MCP (Model Context Protocol) for all external tools. The project MCP server `screening-mcp` (built with MCP-Studio) exposes `web_search` (Tavily) and `semantic_cv_match` (section 4.1).
 
 ## 3. Design Patterns & Application Structure
@@ -24,7 +24,7 @@ Instead of storing only the current state of an entity (e.g., Candidate status =
 * The current state of a job or a candidate is derived by replaying these events.
 
 ### 3.3. CV Embedding Projection
-`cv_text` lives on the append-only `ApplicationSubmitted` event. The command does not write to the vector store and does not call a model. After the event is committed, a projector reads that `cv_text`, gets an embedding from `LLMProvider.embed`, and upserts it into the Chroma collection `cv_embeddings`. The vector id is `application_id`. The metadata records `embedding_provider` (`ollama` or `mock`). Rebuilding the collection reads the same events again and does not modify the Event Store.
+`cv_text` lives on the append-only `ApplicationSubmitted` event. It is the text extracted from the candidate's PDF before the command runs. Words that the PDF places on separate lines are joined into sentences first. The PDF file is saved at `data/cvs/<application_id>.pdf` after the event is committed. It is not an event payload. HR opens that file through `GET /hr/applications/<application_id>/cv`. The command does not write to the vector store and does not call a model. After the event is committed, a projector reads that `cv_text`, gets an embedding from `LLMProvider.embed`, and upserts it into the Chroma collection `cv_embeddings`. The vector id is `application_id`. The metadata records `embedding_provider` (`ollama` or `mock`). Rebuilding the collection reads the same events again and does not modify the Event Store.
 
 ### 3.4. LLM Provider Abstraction
 All model access goes through one interface, so the agent and the projector do not depend on Ollama being installed.

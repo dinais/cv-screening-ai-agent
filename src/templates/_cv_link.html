@@ -1,0 +1,5 @@
+{% if person.application_id and cv_pdf_exists(person.application_id) %}
+  <a class="button small" href="{{ url_for('hr.application_cv', application_id=person.application_id) }}" target="_blank" rel="noopener">Open PDF</a>
+{% else %}
+  <span class="muted">No PDF stored</span>
+{% endif %}

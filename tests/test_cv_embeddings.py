@@ -4,6 +4,7 @@ from src.commands.job_commands import CreateJobCommand
 from src.persistence.event_store import EventStore
 from src.projections.cv_embeddings import CvEmbeddingProjector
 from src.providers.base import LLMProvider
+from tests.pdf_samples import pdf_upload
 from tests.test_auth import TestConfig
 
 
@@ -132,7 +133,7 @@ def test_apply_route_projects_the_cv_after_the_event_is_saved(tmp_path):
     candidate.post("/login", data={"email": "candidate@example.com", "password": "candidate-pass"})
     response = candidate.post(
         f"/apply/{job_id}",
-        data={"full_name": "Ada Lovelace", "cv_text": "Built analytical engines."},
+        data={"full_name": "Ada Lovelace", **pdf_upload("Built analytical engines.")},
         follow_redirects=True,
     )
     assert response.status_code == 200

@@ -2,6 +2,7 @@ from src import create_app
 from src.commands.application_commands import SubmitApplicationCommand
 from src.commands.job_commands import CreateJobCommand
 from src.queries.portal_queries import ApplicationDetailQuery, HrPortalQuery, project_jobs
+from tests.pdf_samples import pdf_upload
 from tests.test_auth import TestConfig
 
 
@@ -74,7 +75,7 @@ def test_hr_dashboard_shows_status_and_applicant_count():
 
     applied = candidate.post(
         f"/apply/{jobs[0].job_id}",
-        data={"full_name": "Ada Lovelace", "cv_text": "Analytical engines."},
+        data={"full_name": "Ada Lovelace", **pdf_upload("Analytical engines.")},
         follow_redirects=True,
     )
     assert applied.status_code == 200
@@ -86,7 +87,7 @@ def test_hr_dashboard_shows_status_and_applicant_count():
 
     again = candidate.post(
         f"/apply/{jobs[0].job_id}",
-        data={"full_name": "Ada Lovelace", "cv_text": "A second copy."},
+        data={"full_name": "Ada Lovelace", **pdf_upload("A second copy.")},
         follow_redirects=True,
     )
     assert b"You have already applied to this job." in again.data
@@ -103,7 +104,8 @@ def test_hr_dashboard_shows_status_and_applicant_count():
     assert detail.status_code == 200
     assert b"Ada Lovelace" in detail.data
     assert b"candidate@example.com" in detail.data
-    assert b"Analytical engines." in detail.data
+    assert b"Open PDF" in detail.data
+    assert b"Analytical engines." not in detail.data
 
 
 def test_missing_job_title_does_not_append_an_event():
@@ -199,14 +201,16 @@ def test_application_drill_down_shows_one_candidate():
 
     _login(hr, "hr@example.com", "hr-pass")
     listing = hr.get(f"/hr/jobs/{job_id}").get_data(as_text=True)
-    assert f'data-href="/hr/applications/{application_id}"' in listing
+    assert f"/hr/applications/{application_id}" in listing
+    assert "No PDF stored" in listing
 
     detail = hr.get(f"/hr/applications/{application_id}")
     assert detail.status_code == 200
     text = detail.get_data(as_text=True)
     assert "Ada Lovelace" in text
     assert "ada@example.com" in text
-    assert "Flask API development." in text
+    assert "No PDF stored" in text
+    assert "Flask API development." not in text
     assert "Python and Flask" in text
     assert "Not evaluated" in text
     assert "Auguste Escoffier" not in text

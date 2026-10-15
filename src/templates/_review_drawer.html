@@ -9,7 +9,7 @@
   </div>
   <div class="drawer-body">
     <h3>CV</h3>
-    <p class="cv-text">{{ person.cv_text }}</p>
+    {% include "_cv_link.html" %}
     <h3>AI assessment</h3>
     <div class="assessment">
       {% with assessment = person.assessment %}{% include "_assessment.html" %}{% endwith %}

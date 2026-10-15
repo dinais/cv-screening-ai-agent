@@ -6,11 +6,20 @@
     <p class="eyebrow">Job</p>
     <h1>{{ job.title }}</h1>
   </div>
-  {% if job.status == "Open" %}
-    <form method="post" action="{{ url_for('hr.close_job', job_id=job.job_id) }}">
-      <button type="submit" class="button reject">Close job</button>
-    </form>
-  {% endif %}
+  <div class="page-actions">
+    {% if job.status == "Open" and job.applicant_list | selectattr("assessment", "none") | list %}
+      <form method="post" action="{{ url_for('hr.evaluate_job', job_id=job.job_id) }}">
+        <button type="submit" class="button" {% if evaluation_running() %}disabled{% endif %}>
+          {% if evaluation_running() %}Evaluation running{% else %}Evaluate this job{% endif %}
+        </button>
+      </form>
+    {% endif %}
+    {% if job.status == "Open" %}
+      <form method="post" action="{{ url_for('hr.close_job', job_id=job.job_id) }}">
+        <button type="submit" class="button reject">Close job</button>
+      </form>
+    {% endif %}
+  </div>
 </section>
 
 <section class="stat-row">

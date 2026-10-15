@@ -6,6 +6,8 @@ import json
 import logging
 import re
 
+from src.cv_pdf import readable_cv_text
+
 logger = logging.getLogger(__name__)
 
 STATUSES = ("recommended", "not_recommended")
@@ -137,7 +139,7 @@ def require_report(report: object, cv_text: str = "") -> dict:
 def repair_report(report: dict, cv_text: str = "") -> dict:
     """Fill a missing score and placeholder narrative from the skill breakdown.
 
-    A skill the model marked missing is marked met when the CV names it. The embedding score is not involved.
+    A skill the model marked missing or partial is marked met when the CV names it. The embedding score is not involved.
     A stored event is not rewritten. The query uses this so an old report still shows every field.
     """
     status = _normalise_status(report.get("status"))
@@ -178,13 +180,14 @@ _SKILL_ALIASES = {
 def _align_breakdown(breakdown: list[dict], cv_text: str) -> tuple[list[dict], bool]:
     if not breakdown or not str(cv_text or "").strip():
         return breakdown, False
+    text = readable_cv_text(cv_text)
     aligned: list[dict] = []
     corrected = False
     for item in breakdown:
-        if item["match"] != "missing":
+        if item["match"] == "met":
             aligned.append(item)
             continue
-        sentence = _cv_sentence(cv_text, item["skill"])
+        sentence = _cv_sentence(text, item["skill"])
         if not sentence:
             aligned.append(item)
             continue
@@ -194,11 +197,58 @@ def _align_breakdown(breakdown: list[dict], cv_text: str) -> tuple[list[dict], b
 
 
 def _cv_sentence(cv_text: str, skill: str) -> str:
-    phrases = _skill_phrases(skill)
-    for part in re.split(r"(?<=[.!?])\s+|\n+", cv_text):
-        if any(_has_phrase(part, phrase) for phrase in phrases):
-            return " ".join(part.split())[:240]
+    flat = " ".join(cv_text.split())
+    if not flat:
+        return ""
+    for phrase in _skill_phrases(skill):
+        if _has_phrase(flat, phrase):
+            return _window(flat, phrase)
+    alternatives = _split_skill(skill, r"\s+or\s+")
+    if len(alternatives) > 1:
+        for part in alternatives:
+            sentence = _cv_sentence(flat, part)
+            if sentence:
+                return sentence
+        return ""
+    parts = _split_skill(skill, r"\s+and\s+")
+    if len(parts) > 1:
+        hits = [_cv_sentence(flat, part) for part in parts]
+        if all(hits):
+            return hits[0]
+        return ""
+    minimum = _years_requirement(skill)
+    if minimum is None:
+        return ""
+    for match in re.finditer(r"(\d+)\s*\+?\s*years", flat, re.IGNORECASE):
+        if int(match.group(1)) >= minimum:
+            return _window(flat, match.group(0))
     return ""
+
+
+def _split_skill(skill: str, pattern: str) -> list[str]:
+    return [part.strip() for part in re.split(pattern, skill, flags=re.IGNORECASE) if part.strip()]
+
+
+def _years_requirement(skill: str) -> int | None:
+    match = re.fullmatch(
+        r"(\d+)\s*\+\s*years(?:\s+of)?(?:\s+experience)?",
+        skill.strip(),
+        re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _window(flat: str, phrase: str) -> str:
+    match = re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", flat, re.IGNORECASE)
+    if match is None:
+        return flat[:240]
+    start = flat.rfind(". ", 0, match.start())
+    start = 0 if start < 0 else start + 2
+    end = flat.find(". ", match.end())
+    end = len(flat) if end < 0 else end + 1
+    return " ".join(flat[start:end].split())[:240]
 
 
 def _skill_phrases(skill: str) -> tuple[str, ...]:

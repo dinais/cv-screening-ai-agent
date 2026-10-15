@@ -364,7 +364,8 @@ def test_hr_drill_down_shows_the_assessment_and_skill_breakdown():
     client.post("/login", data={"email": "hr@example.com", "password": "hr-pass"})
     page = client.get(f"/hr/jobs/{job_id}")
     assert page.status_code == 200
-    assert b"Analytical engines." in page.data
+    assert b"No PDF stored" in page.data
+    assert b"Analytical engines." not in page.data
     assert b"Strong analytical work" in page.data
     assert b"skill-met" in page.data
     assert b"Python services" in page.data

@@ -21,7 +21,7 @@
           <tr>
             <td>{{ person.full_name }}</td>
             <td>{{ person.email }}</td>
-            <td class="clip-cell">{% with text = person.cv_text %}{% include "_text_clip.html" %}{% endwith %}</td>
+            <td>{% include "_cv_link.html" %}</td>
             <td>{% include "_assessment_trigger.html" %}</td>
             <td>{% include "_decision.html" %}</td>
             <td>{% include "_row_actions.html" %}</td>

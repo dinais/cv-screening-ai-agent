@@ -241,6 +241,69 @@ def test_a_skill_marked_missing_is_met_when_the_cv_names_it():
     assert "expression" not in by_skill["Express"]["evidence"]
 
 
+def test_word_per_line_cv_text_still_counts_named_skills():
+    cv = "\n \n".join(
+        [
+            "B.Sc.",
+            "in",
+            "Computer",
+            "Science.",
+            "Frontend",
+            "developer",
+            "with",
+            "4",
+            "years",
+            "of",
+            "experience",
+            "building",
+            "scalable",
+            "web",
+            "applications.",
+            "React,",
+            "TypeScript,",
+            "Tailwind",
+            "CSS,",
+            "Redux",
+            "Toolkit,",
+            "Zustand.",
+            "REST",
+            "API",
+            "integration.",
+            "Git,",
+            "GitHub.",
+        ]
+    )
+    report = require_report(
+        _report(
+            status="not_recommended",
+            score=57,
+            strengths="Strong proficiency in Tailwind CSS.",
+            weaknesses="",
+            missing_information="5+ years of experience.",
+            recommendation="",
+            skill_breakdown=[
+                {"skill": "B.Sc. in Computer Science", "match": "missing", "evidence": ""},
+                {"skill": "3+ years of experience", "match": "missing", "evidence": ""},
+                {"skill": "React and TypeScript", "match": "met", "evidence": "React and TypeScript."},
+                {"skill": "Tailwind CSS", "match": "partial", "evidence": ""},
+                {"skill": "Redux or Zustand", "match": "partial", "evidence": ""},
+                {"skill": "REST APIs", "match": "met", "evidence": "REST APIs."},
+                {"skill": "Git version control", "match": "met", "evidence": "Git."},
+            ],
+        ),
+        cv,
+    )
+    by_skill = {item["skill"]: item for item in report["skill_breakdown"]}
+    assert by_skill["B.Sc. in Computer Science"]["match"] == "met"
+    assert "Computer Science" in by_skill["B.Sc. in Computer Science"]["evidence"]
+    assert by_skill["3+ years of experience"]["match"] == "met"
+    assert "4 years" in by_skill["3+ years of experience"]["evidence"]
+    assert by_skill["Tailwind CSS"]["match"] == "met"
+    assert by_skill["Redux or Zustand"]["match"] == "met"
+    assert report["status"] == "recommended"
+    assert report["score"] == 100
+
+
 def test_a_missing_score_and_the_word_none_are_filled_from_the_skill_breakdown():
     report = require_report(
         _report(

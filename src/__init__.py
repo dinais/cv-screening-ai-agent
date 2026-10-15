@@ -14,6 +14,8 @@ from src.controllers.auth import auth_bp
 from src.controllers.candidate import candidate_bp
 from src.controllers.decorators import load_session_user
 from src.controllers.home import home_bp
+from src.agents.launch import evaluation_running
+from src.cv_pdf import cv_pdf_exists
 from src.controllers.hr import hr_bp
 from src.identity import directory_from_config
 from src.persistence.event_store import EventStore
@@ -83,7 +85,11 @@ def create_app(config_class=Config) -> Flask:
 
     @app.context_processor
     def _inject_user():
-        return {"current_user": getattr(g, "current_user", None)}
+        return {
+            "current_user": getattr(g, "current_user", None),
+            "cv_pdf_exists": cv_pdf_exists,
+            "evaluation_running": evaluation_running,
+        }
 
     @app.errorhandler(403)
     def forbidden(_error):
