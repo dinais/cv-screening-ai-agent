@@ -7,6 +7,11 @@
     <h1>{{ job.title }}</h1>
     <p class="muted"><a href="{{ url_for('hr.portal') }}">Back to dashboard</a></p>
   </div>
+  {% if job.status == "Open" %}
+    <form method="post" action="{{ url_for('hr.close_job', job_id=job.job_id) }}">
+      <button type="submit" class="button reject">Close job</button>
+    </form>
+  {% endif %}
 </section>
 
 <section class="stat-row">

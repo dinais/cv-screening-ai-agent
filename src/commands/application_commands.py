@@ -27,8 +27,11 @@ class SubmitApplicationCommand(CommandHandler):
         if not job_id or not full_name or not email:
             return CommandResult.fail("An application needs a job, a name, and an email.")
 
-        if not _job_exists(self._events.load(job_id)):
+        job_stream = self._events.load(job_id)
+        if not _job_exists(job_stream):
             return CommandResult.fail("Unknown job.")
+        if any(event.event_type == "JobClosed" for event in job_stream):
+            return CommandResult.fail("This job is closed.")
 
         if _already_applied(self._events.load_by_types(("ApplicationSubmitted",)), job_id, email):
             return CommandResult.fail("You have already applied to this job.")

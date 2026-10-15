@@ -98,6 +98,7 @@
           <th>Role</th>
           <th>Status</th>
           <th>Applicants</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -107,15 +108,20 @@
               <td><a href="{{ url_for('hr.job_detail', job_id=job.job_id) }}">{{ job.title }}</a></td>
               <td>{{ job.status }}</td>
               <td>{{ job.applicants }}</td>
+              <td>
+                <form method="post" action="{{ url_for('hr.close_job', job_id=job.job_id) }}">
+                  <button type="submit" class="button reject">Close</button>
+                </form>
+              </td>
             </tr>
           {% endfor %}
         {% elif portal.search %}
           <tr>
-            <td colspan="3" class="empty">No jobs match “{{ portal.search }}”.</td>
+            <td colspan="4" class="empty">No jobs match “{{ portal.search }}”.</td>
           </tr>
         {% else %}
           <tr>
-            <td colspan="3" class="empty">No jobs yet. Publish a role with the form above.</td>
+            <td colspan="4" class="empty">No jobs yet. Publish a role with the form above.</td>
           </tr>
         {% endif %}
       </tbody>

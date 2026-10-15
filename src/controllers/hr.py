@@ -29,6 +29,15 @@ def create_job():
     return redirect(url_for("hr.job_detail", job_id=result.reference_id))
 
 
+@hr_bp.route("/jobs/<job_id>/close", methods=["POST"])
+@hr_required
+def close_job(job_id):
+    command = current_app.extensions["commands"]["close_job"]
+    result = command.execute(job_id=job_id, closed_by=g.current_user.email)
+    flash(result.message if not result.success else "Job closed.", "error" if not result.success else "info")
+    return redirect(url_for("hr.portal"))
+
+
 @hr_bp.route("/jobs/<job_id>")
 @hr_required
 def job_detail(job_id):

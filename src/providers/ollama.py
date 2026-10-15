@@ -9,13 +9,19 @@ import urllib.request
 from typing import Callable
 
 from src.providers.base import LLMError, LLMProvider
-from src.providers.report import REPORT_SCHEMA, SYSTEM_PROMPT, parse_model_text, require_report
+from src.providers.report import SYSTEM_PROMPT, ReportError, parse_model_text, require_report
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "http://localhost:11434"
 DEFAULT_EMBED_MODEL = "nomic-embed-text"
 DEFAULT_CHAT_MODEL = "llama3.2"
+SCHEMA_ATTEMPTS = 3
+CHAT_TIMEOUT = 120
+_CV_LIMIT = 1800
+_REQUIREMENTS_LIMIT = 800
+_HIT_LIMIT = 240
+_HIT_COUNT = 3
 
 
 class OllamaProvider(LLMProvider):
@@ -44,30 +50,43 @@ class OllamaProvider(LLMProvider):
         raise LLMError("Local Ollama returned no embedding.")
 
     def evaluate(self, evidence: dict) -> dict:
+        evidence = _compact_evidence(evidence)
         try:
             agent = self._deep_agent_factory(self._base_url, self._chat_model, SYSTEM_PROMPT)
             result = agent.invoke({"messages": [{"role": "user", "content": json.dumps(evidence)}]})
-            return require_report(parse_model_text(_message_text(result)))
+            return require_report(parse_model_text(_message_text(result)), str(evidence.get("cv_text") or ""))
         except Exception:
             logger.warning(
-                "Deep Agent did not return a valid report. Asking local Ollama model %s with the report schema.",
+                "Deep Agent did not return a valid report. Asking local Ollama model %s for JSON.",
                 self._chat_model,
             )
-        payload = self._post(
-            "/api/chat",
-            {
-                "model": self._chat_model,
-                "stream": False,
-                "format": REPORT_SCHEMA,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": json.dumps(evidence)},
-                ],
-            },
-            timeout=300,
-        )
-        content = str((payload.get("message") or {}).get("content") or "")
-        return require_report(parse_model_text(content))
+        body = {
+            "model": self._chat_model,
+            "stream": False,
+            "format": "json",
+            "options": {"num_predict": 600, "num_ctx": 4096},
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": json.dumps(evidence)},
+            ],
+        }
+        last_error: Exception | None = None
+        for attempt in range(1, SCHEMA_ATTEMPTS + 1):
+            try:
+                payload = self._post("/api/chat", body, timeout=CHAT_TIMEOUT)
+            except LLMError as exc:
+                last_error = exc
+                logger.warning("Ollama report attempt %s did not finish: %s", attempt, exc)
+                continue
+            content = str((payload.get("message") or {}).get("content") or "")
+            try:
+                return require_report(parse_model_text(content), str(evidence.get("cv_text") or ""))
+            except ReportError as exc:
+                last_error = exc
+                logger.warning("Ollama report attempt %s was rejected: %s", attempt, exc)
+        if isinstance(last_error, LLMError):
+            raise last_error
+        raise last_error or ReportError("The model report was incomplete.")
 
     def _post(self, path: str, body: dict, timeout: int) -> dict:
         request = urllib.request.Request(
@@ -93,7 +112,14 @@ def production_deep_agent(base_url: str, model: str, system_prompt: str):
     from deepagents._models import get_model_identifier, get_model_provider
     from langchain_ollama import ChatOllama
 
-    chat = ChatOllama(model=model, base_url=base_url, format="json", temperature=0)
+    chat = ChatOllama(
+        model=model,
+        base_url=base_url,
+        format="json",
+        temperature=0,
+        num_predict=600,
+        num_ctx=4096,
+    )
     profile = HarnessProfile(
         excluded_tools=frozenset(
             {"ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute", "task"}
@@ -111,15 +137,49 @@ def production_deep_agent(base_url: str, model: str, system_prompt: str):
     return create_deep_agent(model=chat, system_prompt=system_prompt)
 
 
+def _compact_evidence(evidence: dict) -> dict:
+    """Keep every required input, short enough for llama3.2's 4096-token window."""
+    hits = evidence.get("tavily_results") or []
+    compact_hits = []
+    if isinstance(hits, list):
+        for hit in hits[:_HIT_COUNT]:
+            if not isinstance(hit, dict):
+                continue
+            compact_hits.append(
+                {
+                    "title": _clip(hit.get("title"), 120),
+                    "url": str(hit.get("url") or ""),
+                    "content": _clip(hit.get("content"), _HIT_LIMIT),
+                }
+            )
+    return {
+        "job_title": _clip(evidence.get("job_title"), 200),
+        "requirements": _clip(evidence.get("requirements"), _REQUIREMENTS_LIMIT),
+        "full_name": _clip(evidence.get("full_name"), 120),
+        "cv_text": _clip(evidence.get("cv_text"), _CV_LIMIT),
+        "semantic_match": evidence.get("semantic_match"),
+        "tavily_results": compact_hits,
+    }
+
+
+def _clip(value: object, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."
+
+
 def _message_text(result: dict) -> str:
+    """Keep every JSON object the Deep Agent produced, not only the first draft."""
+    parts: list[str] = []
     structured = result.get("structured_response")
     if hasattr(structured, "model_dump"):
-        return json.dumps(structured.model_dump())
-    if isinstance(structured, dict):
-        return json.dumps(structured)
+        parts.append(json.dumps(structured.model_dump()))
+    elif isinstance(structured, dict):
+        parts.append(json.dumps(structured))
     messages = result.get("messages") or []
-    chunks = [_content_text(getattr(message, "content", message)) for message in messages]
-    text = "\n".join(chunk for chunk in chunks if chunk.strip())
+    parts.extend(_content_text(getattr(message, "content", message)) for message in messages)
+    text = "\n".join(part for part in parts if part.strip())
     if not text.strip():
         raise LLMError("The model returned nothing.")
     return text

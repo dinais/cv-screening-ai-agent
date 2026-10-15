@@ -8,7 +8,7 @@ from flask import Flask, g, render_template
 from src.commands.application_commands import SubmitApplicationCommand
 from src.commands.auth_commands import LoginCommand, LogoutCommand
 from src.commands.decision_commands import DecideCandidateCommand
-from src.commands.job_commands import CreateJobCommand
+from src.commands.job_commands import CloseJobCommand, CreateJobCommand
 from src.config import Config
 from src.controllers.auth import auth_bp
 from src.controllers.candidate import candidate_bp
@@ -60,6 +60,7 @@ def create_app(config_class=Config) -> Flask:
         "login": LoginCommand(directory, event_store),
         "logout": LogoutCommand(event_store),
         "create_job": CreateJobCommand(event_store),
+        "close_job": CloseJobCommand(event_store),
         "submit_application": SubmitApplicationCommand(event_store),
         "decide_candidate": DecideCandidateCommand(event_store),
     }

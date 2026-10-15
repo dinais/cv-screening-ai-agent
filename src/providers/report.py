@@ -11,6 +11,37 @@ logger = logging.getLogger(__name__)
 STATUSES = ("recommended", "not_recommended")
 SKILL_MATCHES = ("met", "partial", "missing")
 TEXT_FIELDS = ("strengths", "weaknesses", "missing_information", "recommendation")
+_STATUS_ALIASES = {
+    "recommend": "recommended",
+    "yes": "recommended",
+    "fit": "recommended",
+    "suitable": "recommended",
+    "strong_fit": "recommended",
+    "good_fit": "recommended",
+    "no": "not_recommended",
+    "unfit": "not_recommended",
+    "unsuitable": "not_recommended",
+    "reject": "not_recommended",
+    "rejected": "not_recommended",
+    "poor_fit": "not_recommended",
+}
+_MATCH_ALIASES = {
+    "yes": "met",
+    "full": "met",
+    "strong": "met",
+    "meets": "met",
+    "matched": "met",
+    "present": "met",
+    "partially": "partial",
+    "partially_met": "partial",
+    "some": "partial",
+    "weak": "partial",
+    "no": "missing",
+    "none": "missing",
+    "unmet": "missing",
+    "not_met": "missing",
+    "absent": "missing",
+}
 
 SYSTEM_PROMPT = """
 You judge whether one candidate fits one job.
@@ -59,9 +90,13 @@ class ReportError(RuntimeError):
 
 
 def parse_model_text(text: str) -> dict:
-    """Find the report object in model output, even when prose surrounds it."""
+    """Find the report object in model output, even when prose surrounds it.
+
+    A Deep Agent transcript can contain several JSON objects. An earlier draft
+    must not hide a later object that has the required fields.
+    """
     decoder = json.JSONDecoder()
-    fallback = None
+    found: list[dict] = []
     for index, char in enumerate(text or ""):
         if char != "{":
             continue
@@ -69,33 +104,191 @@ def parse_model_text(text: str) -> dict:
             value, _end = decoder.raw_decode(text[index:])
         except json.JSONDecodeError:
             continue
-        if not isinstance(value, dict):
-            continue
-        if "status" in value and "score" in value:
-            return value
-        if fallback is None:
-            fallback = value
-    if fallback is not None:
-        return fallback
-    raise ReportError("The model did not return JSON.")
+        if isinstance(value, dict):
+            found.append(value)
+    if not found:
+        raise ReportError("The model did not return JSON.")
+    best = found[0]
+    best_rank = (_report_quality(best), 0)
+    for index, value in enumerate(found[1:], start=1):
+        rank = (_report_quality(value), index)
+        if rank >= best_rank:
+            best = value
+            best_rank = rank
+    return best
 
 
-def require_report(report: object) -> dict:
+_PLACEHOLDERS = {"none", "n/a", "na", "null", "nil", "n.a", "nothing", "-", "—"}
+
+
+def require_report(report: object, cv_text: str = "") -> dict:
     """Normalise a report, or raise ReportError when it cannot be recorded."""
     if not isinstance(report, dict):
         raise ReportError("The model report was empty.")
-    status = str(report.get("status") or "").strip().lower().replace(" ", "_").replace("-", "_")
+    repaired = repair_report(report, cv_text)
+    if repaired["status"] not in STATUSES or not all(repaired[field] for field in TEXT_FIELDS):
+        missing = [name for name in ("status", *TEXT_FIELDS) if not repaired.get(name)]
+        raise ReportError("The model report was incomplete: " + ", ".join(missing) + ".")
+    if not repaired["skill_breakdown"]:
+        raise ReportError("The model report has no skill breakdown.")
+    return repaired
+
+
+def repair_report(report: dict, cv_text: str = "") -> dict:
+    """Fill a missing score and placeholder narrative from the skill breakdown.
+
+    A skill the model marked missing is marked met when the CV names it. The embedding score is not involved.
+    A stored event is not rewritten. The query uses this so an old report still shows every field.
+    """
+    status = _normalise_status(report.get("status"))
+    breakdown = _skill_breakdown(report.get("skill_breakdown"))
+    breakdown, corrected = _align_breakdown(breakdown, cv_text)
+    fields = {
+        field: "" if _is_placeholder(report.get(field)) else str(report.get(field) or "").strip()
+        for field in TEXT_FIELDS
+    }
+    if corrected and breakdown:
+        fields = _complete_fields({field: "" for field in TEXT_FIELDS}, breakdown)
+        score = _score_from_breakdown(breakdown)
+        status = "recommended" if score >= 60 else "not_recommended"
+        return {"status": status, "score": score, "skill_breakdown": breakdown, **fields}
+    if status in STATUSES and breakdown:
+        fields = _complete_fields(fields, breakdown)
     score = _score_value(report.get("score"))
-    if score is None:
+    if _score_should_follow_breakdown(score, breakdown):
+        score = _score_from_breakdown(breakdown)
+        logger.warning("The model score was missing or zero. The report will use %s from the skill breakdown.", score)
+    elif score is None:
         score = 0
         logger.warning("The model score was missing or invalid. The report will use 0.")
-    fields = {field: str(report.get(field) or "").strip() for field in TEXT_FIELDS}
-    breakdown = _skill_breakdown(report.get("skill_breakdown"))
-    if status not in STATUSES or not all(fields.values()):
-        raise ReportError("The model report was incomplete.")
-    if not breakdown:
-        raise ReportError("The model report has no skill breakdown.")
     return {"status": status, "score": score, "skill_breakdown": breakdown, **fields}
+
+
+_SKILL_ALIASES = {
+    "teamwork": ("team player", "team-player"),
+    "problem-solving": ("problem solving",),
+    "problem solving": ("problem-solving",),
+    "node.js": ("nodejs", "node js"),
+    "nodejs": ("node.js", "node js"),
+    "express": ("express.js", "expressjs"),
+    "express.js": ("express",),
+}
+
+
+def _align_breakdown(breakdown: list[dict], cv_text: str) -> tuple[list[dict], bool]:
+    if not breakdown or not str(cv_text or "").strip():
+        return breakdown, False
+    aligned: list[dict] = []
+    corrected = False
+    for item in breakdown:
+        if item["match"] != "missing":
+            aligned.append(item)
+            continue
+        sentence = _cv_sentence(cv_text, item["skill"])
+        if not sentence:
+            aligned.append(item)
+            continue
+        corrected = True
+        aligned.append({"skill": item["skill"], "match": "met", "evidence": sentence})
+    return aligned, corrected
+
+
+def _cv_sentence(cv_text: str, skill: str) -> str:
+    phrases = _skill_phrases(skill)
+    for part in re.split(r"(?<=[.!?])\s+|\n+", cv_text):
+        if any(_has_phrase(part, phrase) for phrase in phrases):
+            return " ".join(part.split())[:240]
+    return ""
+
+
+def _skill_phrases(skill: str) -> tuple[str, ...]:
+    key = skill.strip().lower()
+    return (key, *_SKILL_ALIASES.get(key, ()))
+
+
+def _has_phrase(text: str, phrase: str) -> bool:
+    return re.search(r"(?<!\w)" + re.escape(phrase) + r"(?!\w)", text, re.IGNORECASE) is not None
+
+
+def _is_placeholder(value: object) -> bool:
+    return str(value or "").strip().lower().rstrip(".") in _PLACEHOLDERS
+
+
+def _score_should_follow_breakdown(score: int | None, breakdown: list[dict]) -> bool:
+    if not breakdown:
+        return False
+    if score not in {None, 0}:
+        return False
+    return any(item["match"] in {"met", "partial"} for item in breakdown)
+
+
+def _score_from_breakdown(breakdown: list[dict]) -> int:
+    weights = {"met": 1.0, "partial": 0.5, "missing": 0.0}
+    total = sum(weights.get(item["match"], 0.0) for item in breakdown)
+    return max(0, min(100, round(100 * total / len(breakdown))))
+
+
+def _complete_fields(fields: dict, breakdown: list[dict]) -> dict:
+    """Fill a blank narrative from the skill breakdown. Does not replace text the model wrote."""
+    filled = dict(fields)
+    missing = [item["skill"] for item in breakdown if item["match"] == "missing"]
+    partial = [item["skill"] for item in breakdown if item["match"] == "partial"]
+    met = [item["skill"] for item in breakdown if item["match"] == "met"]
+    gaps = missing + partial
+    if not filled["weaknesses"]:
+        filled["weaknesses"] = (
+            "Not fully shown in the CV: " + ", ".join(gaps)
+            if gaps
+            else "No gap was identified from the CV against the required skills."
+        )
+    if not filled["missing_information"]:
+        filled["missing_information"] = (
+            "The CV does not show: " + ", ".join(missing)
+            if missing
+            else "No required skill was absent from the CV."
+        )
+    if not filled["strengths"]:
+        filled["strengths"] = (
+            "Shown in the CV: " + ", ".join(met) if met else "No required skill was fully shown in the CV."
+        )
+    if not filled["recommendation"]:
+        filled["recommendation"] = (
+            "The CV does not cover: " + ", ".join(gaps) if gaps else "The CV covers the required skills."
+        )
+    return filled
+
+
+def _report_quality(value: dict) -> int:
+    """How much of the required report is present. Used only to choose among JSON objects."""
+    status_ok = _normalise_status(value.get("status")) in STATUSES
+    fields_ok = all(str(value.get(field) or "").strip() for field in TEXT_FIELDS)
+    breakdown_ok = bool(_skill_breakdown(value.get("skill_breakdown")))
+    score_ok = _score_value(value.get("score")) is not None
+    return int(status_ok) + int(fields_ok) + int(breakdown_ok) + int(score_ok) + int(status_ok and fields_ok and breakdown_ok)
+
+
+def _normalise_status(value: object) -> str:
+    status = str(value or "").strip().lower().rstrip(".").replace(" ", "_").replace("-", "_")
+    if "not" in status and "recommend" in status:
+        return "not_recommended"
+    if "recommend" in status:
+        return "recommended"
+    return _STATUS_ALIASES.get(status, status)
+
+
+def _normalise_match(value: object) -> str:
+    match = str(value or "").strip().lower().rstrip(".").replace(" ", "_").replace("-", "_")
+    if match in SKILL_MATCHES:
+        return match
+    if match in _MATCH_ALIASES:
+        return _MATCH_ALIASES[match]
+    if "partial" in match:
+        return "partial"
+    if match.startswith("not") or "missing" in match:
+        return "missing"
+    if "met" in match:
+        return "met"
+    return match
 
 
 def _skill_breakdown(value: object) -> list[dict]:
@@ -106,7 +299,7 @@ def _skill_breakdown(value: object) -> list[dict]:
         if not isinstance(item, dict):
             continue
         skill = str(item.get("skill") or "").strip()
-        match = str(item.get("match") or "").strip().lower()
+        match = _normalise_match(item.get("match"))
         if not skill or match not in SKILL_MATCHES:
             continue
         evidence = "" if match == "missing" else str(item.get("evidence") or "").strip()

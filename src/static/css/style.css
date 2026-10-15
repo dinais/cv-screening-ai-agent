@@ -124,7 +124,13 @@ h2 { margin: 0 0 0.75rem; font-size: 1.2rem; }
 .stat-label { display: block; color: var(--muted); font-size: 0.85rem; }
 .stat-value { font-size: 2rem; }
 
-.page-header { margin-bottom: 1.25rem; }
+.page-header {
+  margin-bottom: 1.25rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
 
 .auth-layout {
   display: flex;

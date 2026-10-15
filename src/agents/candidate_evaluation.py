@@ -74,11 +74,15 @@ class CandidateEvaluationAgent:
 
 
 def select_pending(events: EventStore) -> list[PendingApplication]:
-    """Applications whose stream has no CandidateEvaluated event yet."""
+    """Unevaluated applications whose job has not been closed."""
     jobs: dict[str, dict] = {}
     for event in events.load_by_types(("JobCreated",)):
         job_id = str(event.payload.get("job_id") or event.aggregate_id)
         jobs[job_id] = event.payload
+    closed = {
+        str(event.payload.get("job_id") or event.aggregate_id)
+        for event in events.load_by_types(("JobClosed",))
+    }
     pending: list[PendingApplication] = []
     for event in events.load_by_types(("ApplicationSubmitted",)):
         application_id = str(event.payload.get("application_id") or event.aggregate_id)
@@ -86,7 +90,7 @@ def select_pending(events: EventStore) -> list[PendingApplication]:
             continue
         job_id = str(event.payload.get("job_id") or "")
         job = jobs.get(job_id)
-        if job is None:
+        if job is None or job_id in closed:
             continue
         pending.append(
             PendingApplication(

@@ -19,3 +19,5 @@ class Config:
     HR_PASSWORD = os.getenv("HR_PASSWORD", "changeme")
     CANDIDATE_EMAIL = os.getenv("CANDIDATE_EMAIL", "candidate@example.com")
     CANDIDATE_PASSWORD = os.getenv("CANDIDATE_PASSWORD", "changeme")
+    # More mock candidates, as email:password pairs separated by commas.
+    EXTRA_CANDIDATES = os.getenv("EXTRA_CANDIDATES", "")

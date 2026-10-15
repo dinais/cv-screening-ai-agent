@@ -175,7 +175,9 @@ def test_ollama_retries_once_with_the_report_schema(monkeypatch):
     report = OllamaProvider(deep_agent_factory=broken_agent).evaluate({"cv_text": "Flask"})
     assert report["status"] == "recommended"
     assert captured["url"] == "http://localhost:11434/api/chat"
-    assert "skill_breakdown" in captured["body"]["format"]["required"]
+    assert captured["body"]["format"] == "json"
+    assert captured["body"]["options"]["num_predict"] == 600
+    assert "skill_breakdown" in captured["body"]["messages"][0]["content"]
 
 
 def test_ollama_down_raises_instead_of_falling_back_to_mock(monkeypatch):
@@ -200,6 +202,81 @@ def test_deep_agent_runtime_uses_local_ollama():
     assert "openai" not in source.lower()
 
 
+def test_a_skill_marked_missing_is_met_when_the_cv_names_it():
+    cv = (
+        "Programming Languages: Python, C, C++, JavaScript. "
+        "Experience: Developed a backend application using Node.js and Express. "
+        "Soft Skills: excellent problem-solving abilities, and a strong team player."
+    )
+    report = require_report(
+        _report(
+            status="not_recommended",
+            score=0,
+            strengths="None",
+            weaknesses="None",
+            missing_information="Node.js, Express, problem-solving, and teamwork skills.",
+            recommendation="Not recommended",
+            skill_breakdown=[
+                {"skill": "Python", "match": "met", "evidence": "Programming Languages: Python, C, C++, JavaScript."},
+                {"skill": "Node.js", "match": "missing", "evidence": ""},
+                {"skill": "Express", "match": "missing", "evidence": ""},
+                {"skill": "Problem-solving", "match": "missing", "evidence": ""},
+                {"skill": "Teamwork", "match": "missing", "evidence": ""},
+                {"skill": "Kubernetes", "match": "missing", "evidence": ""},
+            ],
+        ),
+        cv,
+    )
+    by_skill = {item["skill"]: item for item in report["skill_breakdown"]}
+    assert by_skill["Node.js"]["match"] == "met"
+    assert "Node.js" in by_skill["Node.js"]["evidence"]
+    assert by_skill["Express"]["match"] == "met"
+    assert by_skill["Problem-solving"]["match"] == "met"
+    assert by_skill["Teamwork"]["match"] == "met"
+    assert "team player" in by_skill["Teamwork"]["evidence"]
+    assert by_skill["Kubernetes"]["match"] == "missing"
+    assert report["status"] == "recommended"
+    assert report["score"] == 83
+    assert "Kubernetes" in report["weaknesses"]
+    assert "expression" not in by_skill["Express"]["evidence"]
+
+
+def test_a_missing_score_and_the_word_none_are_filled_from_the_skill_breakdown():
+    report = require_report(
+        _report(
+            score=None,
+            strengths="None",
+            weaknesses="None",
+            skill_breakdown=[
+                {"skill": "Python", "match": "met", "evidence": "Flask APIs"},
+                {"skill": "Docker", "match": "met", "evidence": "Docker"},
+                {"skill": "Node.js", "match": "missing", "evidence": ""},
+            ],
+        )
+    )
+    assert report["score"] == 67
+    assert report["strengths"] == "Shown in the CV: Python, Docker"
+    assert "Node.js" in report["weaknesses"]
+    assert report["recommendation"] == "Proceed"
+
+
+def test_blank_narrative_fields_are_filled_from_the_skill_breakdown():
+    report = require_report(
+        _report(
+            weaknesses="",
+            missing_information="",
+            skill_breakdown=[
+                {"skill": "Python", "match": "met", "evidence": "Flask APIs"},
+                {"skill": "Kubernetes", "match": "missing", "evidence": "should be cleared"},
+            ],
+        )
+    )
+    assert report["strengths"] == "Python"
+    assert "Kubernetes" in report["weaknesses"]
+    assert report["missing_information"] == "The CV does not show: Kubernetes"
+    assert report["skill_breakdown"][1]["evidence"] == ""
+
+
 def test_report_requires_a_skill_breakdown():
     with pytest.raises(ReportError):
         require_report(_report(skill_breakdown=[]))
@@ -220,3 +297,61 @@ def test_report_json_is_read_when_the_model_adds_prose():
     report = require_report(parse_model_text(text))
     assert report["status"] == "not_recommended"
     assert report["score"] == 81
+
+
+def test_a_later_complete_report_wins_over_an_earlier_draft():
+    draft = {"status": "recommended", "score": 10, "strengths": ""}
+    text = json.dumps(draft) + "\n" + json.dumps(_report(status="Rejected.", skill_breakdown=[{"skill": "Python", "match": "Yes", "evidence": "Flask APIs"}]))
+    report = require_report(parse_model_text(text))
+    assert report["status"] == "not_recommended"
+    assert report["skill_breakdown"] == [{"skill": "Python", "match": "met", "evidence": "Flask APIs"}]
+
+
+def test_ollama_repeats_the_same_schema_call_until_the_report_is_complete(monkeypatch):
+    calls = []
+
+    def broken_agent(*_args):
+        raise RuntimeError("deep agent failed")
+
+    def fake_urlopen(request, timeout=0):
+        body = json.loads(request.data.decode("utf-8"))
+        calls.append(body)
+        if len(calls) < 3:
+            return _Response({"message": {"content": json.dumps({"status": "maybe", "score": 1})}})
+        return _Response({"message": {"content": json.dumps(_report())}})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    report = OllamaProvider(deep_agent_factory=broken_agent).evaluate({"cv_text": "Flask"})
+    assert report["status"] == "recommended"
+    assert len(calls) == 3
+    assert calls[0] == calls[1] == calls[2]
+
+
+def test_ollama_shortens_the_evidence_and_retries_a_timeout(monkeypatch):
+    calls = []
+
+    def broken_agent(*_args):
+        raise RuntimeError("deep agent failed")
+
+    def fake_urlopen(request, timeout=0):
+        body = json.loads(request.data.decode("utf-8"))
+        calls.append((body, timeout))
+        if len(calls) == 1:
+            raise TimeoutError("timed out")
+        evidence = json.loads(body["messages"][1]["content"])
+        assert len(evidence["cv_text"]) < 2000
+        assert evidence["cv_text"].endswith("...")
+        assert len(evidence["tavily_results"]) == 3
+        return _Response({"message": {"content": json.dumps(_report())}})
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    report = OllamaProvider(deep_agent_factory=broken_agent).evaluate(
+        {
+            "cv_text": "Python " * 2000,
+            "requirements": "Python",
+            "tavily_results": [{"title": "a", "url": f"https://example.com/{i}", "content": "x" * 500} for i in range(6)],
+        }
+    )
+    assert report["status"] == "recommended"
+    assert len(calls) == 2
+    assert calls[0][1] == 120

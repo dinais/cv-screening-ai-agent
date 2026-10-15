@@ -20,17 +20,18 @@ This document breaks down the system development into distinct, incrementally de
 * **Goal:** Record jobs and applications as events, and rebuild the current state for the UI by replaying those events. No ORM. Commands only append. Queries only read.
 * **Entities:**
   * **Job:** An open role created by an HR user.
-  * **Application:** One candidate's submission for one job. The candidate is the logged-in account, identified by email. Login accounts stay the mock users from Feature 1.
+  * **Application:** One candidate's submission for one job. The candidate is the logged-in account, identified by email. Login accounts stay the mock users from Feature 1: the HR account, `CANDIDATE_EMAIL`, and any extra candidate pairs in `EXTRA_CANDIDATES`.
 * **Events:**
   * `JobCreated` — aggregate type `Job`. Payload: `job_id`, `title`, `requirements`, `created_by`. Appended by `CreateJobCommand` when HR submits the new-job form. A missing title or missing requirements is rejected before any database write.
+  * `JobClosed` — aggregate type `Job`, same aggregate id as `JobCreated`. Payload: `job_id`, `closed_by` (the logged-in HR email). Appended by `CloseJobCommand`. The `JobCreated` row is not updated or deleted. A missing `job_id` or `closed_by`, an unknown job, or a stream that already contains `JobClosed` is rejected before any database write. HR cannot reopen a job.
   * `ApplicationSubmitted` — aggregate type `Application`. Payload: `application_id`, `job_id`, `full_name`, `email`, `cv_text`. Appended by `SubmitApplicationCommand` when a candidate submits the form for one job. `cv_text` is plain text. A missing name, a missing job, or an unknown job is rejected before any database write. Before appending, the command reads existing `ApplicationSubmitted` events and rejects the command when this email has already applied to this `job_id`. That rejection also happens before any database write. Embeddings are Feature 4.
 * **Query Model:**
   * The read side loads `JobCreated` and `ApplicationSubmitted` from the Event Store in order and replays them. It does not update or delete rows.
-  * Each `JobCreated` becomes an open job with status Open.
+  * Each `JobCreated` becomes an open job with status Open. A later `JobClosed` for that `job_id` changes the replayed status to Closed.
   * Each `ApplicationSubmitted` is attached to that job, increases its applicant count, and records that applicant's `full_name`, `email`, and `cv_text`.
-  * The HR dashboard shows the open-job count, the total applicant count, and a table with each job's status and applicant count.
+  * The HR dashboard shows the open-job count, the applicant count for open jobs only, and a table of open jobs. A closed job is left out of that table, the counts, and HR search. `GET /hr/jobs/<job_id>` still shows a closed job, with status Closed, so its applicants and assessments remain reachable by id.
   * The HR job drill-down shows the requirements, the applicant count, and the list of applicants (`full_name`, `email`, and `cv_text`).
-  * The candidate dashboard lists the same open jobs. The query takes the logged-in candidate's email. A job with no `ApplicationSubmitted` for that email is marked not applied. A job that already has one is marked applied.
+  * The candidate dashboard lists open jobs only. A closed job is not listed and its apply URL returns 404. `SubmitApplicationCommand` also rejects a closed job before any write. The query takes the logged-in candidate's email. A job with no `ApplicationSubmitted` for that email is marked not applied. A job that already has one is marked applied.
 * **Search (HR):**
   * The HR dashboard has a search box. It submits `GET /hr/?q=<text>`. Nothing is written.
   * Matching is a case-insensitive substring match on the replayed state. A job matches when `q` is in its `title` or `requirements`. An applicant matches when `q` is in `full_name`, `email`, or `cv_text`.
@@ -45,6 +46,7 @@ This document breaks down the system development into distinct, incrementally de
   * Candidate dashboard: each open job shows an Apply action, or an Applied indicator when this candidate has already applied. There is no generic job dropdown.
   * Apply action opens a form for that job only. The form collects the candidate's name and `cv_text`. After a successful submit, the candidate returns to the dashboard and that job shows Applied.
   * Command: `CreateJobCommand` -> append `JobCreated`.
+  * Command: `CloseJobCommand` -> append `JobClosed`. The HR dashboard and the job page post this when the job is Open. A candidate account gets 403. The evaluation agent does not issue this command.
   * Command: `SubmitApplicationCommand` -> append `ApplicationSubmitted`, or reject a duplicate application for the same email and `job_id`.
   * Query: replay the events into the HR dashboard, the HR applicant list, and the candidate dashboard.
   * Query: HR search over jobs and applicants, and the single-application drill-down.
@@ -70,7 +72,7 @@ This document breaks down the system development into distinct, incrementally de
     * `embed(text) -> list[float]` — turns text into a vector.
     * `evaluate(evidence) -> dict` — returns one evaluation report in the JSON shape described under Expected output.
   * The Feature 4 projector and the RAG query call `embed`. The agent calls `evaluate`. Neither of them calls Ollama directly anymore.
-  * **`OllamaProvider`** (default) — local Ollama in Docker at `OLLAMA_BASE_URL` (`http://localhost:11434`). Embeddings use `OLLAMA_EMBED_MODEL` (`nomic-embed-text`, 768 dimensions). Evaluation runs the Deep Agent on `ChatOllama` with `OLLAMA_CHAT_MODEL` (`llama3.2`) in JSON mode. If the Deep Agent returns no valid report, the provider asks Ollama's `/api/chat` once more with the report JSON schema.
+  * **`OllamaProvider`** (default) — local Ollama in Docker at `OLLAMA_BASE_URL` (`http://localhost:11434`). Embeddings use `OLLAMA_EMBED_MODEL` (`nomic-embed-text`, 768 dimensions). Evaluation runs the Deep Agent on `ChatOllama` with `OLLAMA_CHAT_MODEL` (`llama3.2`) in JSON mode. If the Deep Agent transcript contains several JSON objects, the complete report is kept. The CV, requirements, and Tavily snippets sent to the model are shortened so they fit `llama3.2`'s context window. The same kinds of input are still sent. If that report is still invalid, the provider repeats the same Ollama `/api/chat` call in JSON mode, up to three times, including when a call does not finish. It does not send the full JSON schema to Ollama, because that grammar does not finish on this local model. Wording such as `not recommended` or a skill match of `yes` is read as the allowed values. The required report fields do not change.
   * **`MockLLMProvider`** — for development machines with no local Ollama. It makes no network call. `embed` returns a 768-dimension vector derived from a hash of the text, so the same text always gives the same vector. `evaluate` builds the report from the evidence alone: the score comes from `semantic_match`, and the skill breakdown comes from matching requirement keywords against `cv_text`.
   * **Selection:** `LLM_PROVIDER=ollama|mock`, default `ollama`. The agent never falls back to the mock on its own. If Ollama is down while `LLM_PROVIDER=ollama`, the evaluation fails and nothing is appended.
   * **No mixing:** Each Chroma vector stores the `embedding_provider` that made it in its metadata. Mock vectors and Ollama vectors are not comparable. After switching `LLM_PROVIDER`, rebuild `cv_embeddings` by replaying `ApplicationSubmitted` (Feature 4 replay).
@@ -85,7 +87,7 @@ This document breaks down the system development into distinct, incrementally de
   * **Tavily (via MCP only):** Web search to check industry standards for the job requirements and public details named in the CV. The agent calls the Feature 6 MCP tool. It never sends an HTTP request to Tavily itself.
   * **Write path:** The agent does not insert into the Event Store itself. It issues `EvaluateCandidateCommand`, and that command appends one `CandidateEvaluated` event.
 * **Logic / actions, in order:**
-  1. Select each `ApplicationSubmitted` event that has no later `CandidateEvaluated` for the same `application_id`.
+  1. Select each `ApplicationSubmitted` event that has no later `CandidateEvaluated` for the same `application_id`, and whose job has no `JobClosed` event. Applications for a closed job are not a failure and are not retried.
   2. Load that job's requirements.
   3. RAG: query `cv_embeddings` with the job requirements and score the semantic match against this candidate's CV vector.
   4. Through MCP, run a Tavily search for current industry expectations of those requirements and for public facts the CV names. Do not invent sources.
@@ -108,9 +110,9 @@ This document breaks down the system development into distinct, incrementally de
   }
   ```
   * `status`: `recommended` or `not_recommended`.
-  * `score`: the candidate match score, an integer from 0 to 100. Out-of-range values are clamped.
-  * `skill_breakdown`: one entry per skill named in the job requirements. `match` is `met`, `partial`, or `missing`. `evidence` quotes or paraphrases the CV and is empty when `match` is `missing`.
-  * `strengths`, `weaknesses`, `missing_information`, `recommendation`: the four fields Rule 4 requires. None may be empty.
+  * `score`: the candidate match score, an integer from 0 to 100. Out-of-range values are clamped. A missing score, or a score of 0 while the breakdown has a met or partial skill, is replaced by the share of skills met (a partial skill counts as half).
+  * `skill_breakdown`: one entry per skill named in the job requirements. `match` is `met`, `partial`, or `missing`. `evidence` quotes or paraphrases the CV and is empty when `match` is `missing`. This check reads the CV text. It does not use the embedding. When the model marks a skill missing but the CV names that skill, or a clear equivalent such as "team player" for teamwork, the skill is marked met and the CV sentence is the evidence. The score, status, and the four narrative fields are then rebuilt from that corrected breakdown. The HR page does the same for an assessment already saved, without rewriting the event.
+  * `strengths`, `weaknesses`, `missing_information`, `recommendation`: the four fields Rule 4 requires. None may be empty. When the model leaves one blank, or writes a placeholder such as `None`, and the skill breakdown is present, that field is filled from the breakdown. Text the model did write is kept. The HR page applies the same fill when showing an assessment that was saved before this rule, without rewriting the event.
 * **Expected output — event:**
   * One `CandidateEvaluated` event on aggregate type `Application`. Payload: the report above plus `application_id`, `job_id`, `email`, `semantic_match` (0–1 RAG similarity), `sources` (Tavily URLs), and `provider` (`ollama` or `mock`).
   * Events recorded before this change have no `skill_breakdown` or `provider`. The query model reads those as an empty breakdown and provider `ollama`. Old events are never rewritten.

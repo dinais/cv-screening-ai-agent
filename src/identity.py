@@ -39,17 +39,33 @@ class IdentityDirectory:
 
 
 def directory_from_config(config) -> IdentityDirectory:
-    return IdentityDirectory(
-        [
+    credentials = [
+        Credential(
+            email=config.HR_EMAIL,
+            password_hash=generate_password_hash(config.HR_PASSWORD),
+            role=ROLE_HR,
+        )
+    ]
+    for email, password in _candidate_accounts(config):
+        credentials.append(
             Credential(
-                email=config.HR_EMAIL,
-                password_hash=generate_password_hash(config.HR_PASSWORD),
-                role=ROLE_HR,
-            ),
-            Credential(
-                email=config.CANDIDATE_EMAIL,
-                password_hash=generate_password_hash(config.CANDIDATE_PASSWORD),
+                email=email,
+                password_hash=generate_password_hash(password),
                 role=ROLE_CANDIDATE,
-            ),
-        ]
-    )
+            )
+        )
+    return IdentityDirectory(credentials)
+
+
+def _candidate_accounts(config) -> list[tuple[str, str]]:
+    accounts = [(config.CANDIDATE_EMAIL, config.CANDIDATE_PASSWORD)]
+    extra = str(getattr(config, "EXTRA_CANDIDATES", "") or "")
+    for item in extra.split(","):
+        item = item.strip()
+        if ":" not in item:
+            continue
+        email, password = item.split(":", 1)
+        email = email.strip()
+        if email and password:
+            accounts.append((email, password))
+    return accounts

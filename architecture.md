@@ -20,7 +20,7 @@ The application follows a strict CQRS organization as depicted in the system dia
 
 ### 3.2. Event Sourcing
 Instead of storing only the current state of an entity (e.g., Candidate status = "Evaluated"), the relational database acts as an Append-Only Event Store[cite: 1]. 
-* Every state change is saved as an immutable event (e.g., `JobCreated`, `ApplicationSubmitted`, `CandidateEvaluated`, `CandidateDecided`).
+* Every state change is saved as an immutable event (e.g., `JobCreated`, `JobClosed`, `ApplicationSubmitted`, `CandidateEvaluated`, `CandidateDecided`). Closing a job appends `JobClosed`. It does not delete `JobCreated`. Replay then treats that job as Closed: it leaves the open dashboards, and the evaluation agent does not select its applications.
 * The current state of a job or a candidate is derived by replaying these events.
 
 ### 3.3. CV Embedding Projection
@@ -32,7 +32,7 @@ All model access goes through one interface, so the agent and the projector do n
 | Operation | Used by | `OllamaProvider` | `MockLLMProvider` |
 |---|---|---|---|
 | `embed(text) -> list[float]` | CV projector, `semantic_cv_match` | Ollama `/api/embed`, `nomic-embed-text`, 768 dimensions | Deterministic 768-dimension hash vector, no network |
-| `evaluate(evidence) -> dict` | Evaluation agent | Deep Agent on `ChatOllama` (`llama3.2`, JSON mode). One retry through Ollama `/api/chat` with the report schema | Report derived from `semantic_match` and requirement-keyword overlap with `cv_text` |
+| `evaluate(evidence) -> dict` | Evaluation agent | Deep Agent on `ChatOllama` (`llama3.2`, JSON mode, context trimmed to the 4096-token window). If that report is invalid or the call does not finish, the same Ollama `/api/chat` call in JSON mode is repeated up to three times | Report derived from `semantic_match` and requirement-keyword overlap with `cv_text` |
 
 * **Selection:** `LLM_PROVIDER=ollama|mock`, read once at process start. Default `ollama`. There is no automatic fallback from Ollama to the mock.
 * **Isolation:** Vectors from different providers are never compared. A query whose provider differs from a vector's `embedding_provider` fails instead of returning a score. After switching provider, rebuild `cv_embeddings` by replay.

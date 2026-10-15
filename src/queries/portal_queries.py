@@ -3,10 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from src.persistence.event_store import EventStore, StoredEvent
+from src.providers.report import repair_report
 from src.queries.base import QueryHandler
 
-_PORTAL_EVENTS = ("JobCreated", "ApplicationSubmitted")
-_DETAIL_EVENTS = ("JobCreated", "ApplicationSubmitted", "CandidateEvaluated", "CandidateDecided")
+_PORTAL_EVENTS = ("JobCreated", "JobClosed", "ApplicationSubmitted")
+_DETAIL_EVENTS = ("JobCreated", "JobClosed", "ApplicationSubmitted", "CandidateEvaluated", "CandidateDecided")
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,12 @@ def project_jobs(events: list[StoredEvent]) -> tuple[JobView, ...]:
                 applicants=0,
                 applicant_list=(),
             )
+        elif event.event_type == "JobClosed":
+            job_id = str(event.payload.get("job_id") or event.aggregate_id)
+            current = jobs.get(job_id)
+            if current is None:
+                continue
+            jobs[job_id] = replace(current, status="Closed")
         elif event.event_type == "ApplicationSubmitted":
             job_id = str(event.payload.get("job_id") or "")
             current = jobs.get(job_id)
@@ -116,7 +123,7 @@ def project_jobs(events: list[StoredEvent]) -> tuple[JobView, ...]:
             )
         elif event.event_type == "CandidateEvaluated":
             application_id = str(event.payload.get("application_id") or event.aggregate_id)
-            jobs = _with_assessment(jobs, application_id, _assessment(event.payload))
+            jobs = _with_assessment(jobs, application_id, event.payload)
         elif event.event_type == "CandidateDecided":
             application_id = str(event.payload.get("application_id") or event.aggregate_id)
             decision = str(event.payload.get("decision") or "")
@@ -138,39 +145,38 @@ def _with_decision(jobs: dict[str, JobView], application_id: str, decision: str,
     return updated
 
 
-def _with_assessment(jobs: dict[str, JobView], application_id: str, assessment: AssessmentView) -> dict[str, JobView]:
+def _with_assessment(jobs: dict[str, JobView], application_id: str, payload: dict) -> dict[str, JobView]:
     updated: dict[str, JobView] = {}
     for job_id, job in jobs.items():
         people = tuple(
-            replace(person, assessment=assessment) if person.application_id == application_id else person
+            replace(person, assessment=_assessment(payload, person.cv_text))
+            if person.application_id == application_id
+            else person
             for person in job.applicant_list
         )
         updated[job_id] = replace(job, applicant_list=people)
     return updated
 
 
-def _assessment(payload: dict) -> AssessmentView:
+def _assessment(payload: dict, cv_text: str = "") -> AssessmentView:
     raw_sources = payload.get("sources") or []
     if not isinstance(raw_sources, list):
         raw_sources = []
     try:
-        score = int(payload.get("score"))
-    except (TypeError, ValueError):
-        score = 0
-    try:
         semantic_match = float(payload.get("semantic_match"))
     except (TypeError, ValueError):
         semantic_match = 0.0
+    repaired = repair_report(payload, cv_text)
     return AssessmentView(
-        status=str(payload.get("status") or ""),
-        score=score,
-        strengths=str(payload.get("strengths") or ""),
-        weaknesses=str(payload.get("weaknesses") or ""),
-        missing_information=str(payload.get("missing_information") or ""),
-        recommendation=str(payload.get("recommendation") or ""),
+        status=str(repaired.get("status") or ""),
+        score=int(repaired.get("score") or 0),
+        strengths=str(repaired.get("strengths") or ""),
+        weaknesses=str(repaired.get("weaknesses") or ""),
+        missing_information=str(repaired.get("missing_information") or ""),
+        recommendation=str(repaired.get("recommendation") or ""),
         semantic_match=semantic_match,
         sources=tuple(str(item) for item in raw_sources),
-        skill_breakdown=_skills(payload.get("skill_breakdown")),
+        skill_breakdown=_skills(repaired.get("skill_breakdown")),
         provider=str(payload.get("provider") or "ollama"),
     )
 

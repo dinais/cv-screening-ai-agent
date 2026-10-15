@@ -19,6 +19,20 @@ def _client():
     return app.test_client()
 
 
+def test_extra_candidates_can_log_in():
+    class Config(TestConfig):
+        EXTRA_CANDIDATES = "maya.cohen@example.com:maya-pass,omar.nasser@example.com:omar-pass"
+
+    client = create_app(Config).test_client()
+    response = client.post(
+        "/login",
+        data={"email": "omar.nasser@example.com", "password": "omar-pass"},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert b"Apply" in response.data or b"open" in response.data.lower()
+
+
 def test_hr_login_reaches_dashboard():
     client = _client()
     response = client.post(
