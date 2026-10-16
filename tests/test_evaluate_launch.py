@@ -1,9 +1,10 @@
 import os
+import subprocess
 import sys
 
 from src import create_app
 from src.agents.candidate_evaluation import select_pending
-from src.agents.launch import start_evaluation
+from src.agents.launch import evaluation_running, start_evaluation
 from src.commands.application_commands import SubmitApplicationCommand
 from src.commands.evaluation_commands import EvaluateCandidateCommand
 from src.commands.job_commands import CreateJobCommand
@@ -67,6 +68,15 @@ def test_start_evaluation_launches_the_agent_process(tmp_path):
     one_job, _message = start_evaluation(job_id="job-1", pid_file=pid_file, popen=popen)
     assert one_job
     assert calls[1][0] == [sys.executable, "-m", "src.agents", "--job-id", "job-1"]
+
+
+def test_a_finished_evaluation_is_not_still_running(tmp_path):
+    finished = subprocess.Popen([sys.executable, "-c", "pass"])
+    finished.wait(timeout=15)
+    pid_file = tmp_path / "evaluation.pid"
+    pid_file.write_text(str(finished.pid), encoding="utf-8")
+    assert evaluation_running(pid_file) is False
+    assert not pid_file.exists()
 
 
 def test_hr_buttons_start_a_process_and_do_not_append(monkeypatch):
