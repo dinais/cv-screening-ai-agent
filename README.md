@@ -32,11 +32,6 @@ The project follows **Specification-Driven Application Development (SDAD)**. The
 <!-- Replace the link below with your demo video (YouTube, Loom, or a GitHub upload). -->
 ▶️ **[Watch the demo video](https://example.com/your-demo-link)**
 
-<!-- Add screenshots or a GIF to docs/ and update the paths below. -->
-| HR dashboard | Candidate application | AI assessment |
-|---|---|---|
-| ![HR dashboard](docs/screenshots/hr-dashboard.png) | ![Candidate application](docs/screenshots/apply.png) | ![AI assessment](docs/screenshots/assessment.png) |
-
 ---
 
 ## Features
